@@ -1,0 +1,26 @@
+PhoneAgent
+Copyright 2026 The PhoneAgent Authors
+
+This product is a modified version of Google AI Edge Gallery
+(https://github.com/google-ai-edge/gallery), Copyright 2025-2026 Google LLC,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+PhoneAgent is not affiliated with or endorsed by Google. "Gemma" and other
+Google names are trademarks of Google LLC.
+
+Summary of modifications (details in the git history and docs/):
+- Removed Firebase Analytics and Cloud Messaging, ML Kit GenAI / AICore,
+  Google Play services TFLite and oss-licenses, scheduled notifications and
+  the boot receiver.
+- Replaced MediaPipe's usage-stats uploader (Firebase datatransport) with the
+  no-op telemetry-stub module.
+- The model list is bundled with the app and fetched only on request.
+- Added a build-time privacy guard, a static licenses screen, a "ci" build
+  type, and the Phone Agent feature (package
+  com.google.ai.edge.gallery.phoneagent).
+Upstream source files changed by this fork are marked with "PhoneAgent"
+comments.
+
+Third-party libraries and their licenses are listed in the app under
+Settings > Third-party libraries, generated from
+Android/src/app/src/main/assets/phoneagent/third_party_licenses.tsv.

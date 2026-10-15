@@ -31,7 +31,8 @@ android {
   compileSdk { this.version = release(37) { minorApiLevel = 0 } }
 
   defaultConfig {
-    applicationId = "com.google.aiedge.gallery"
+    // PhoneAgent fork: own application id, so it installs next to upstream's app.
+    applicationId = "io.github.monkeygamer2010.phoneagent"
     minSdk = 31
     targetSdk = 37
     versionCode = 46
@@ -42,7 +43,7 @@ android {
     manifestPlaceholders["appAuthRedirectScheme"] =
         "REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP"
     manifestPlaceholders["applicationName"] = "com.google.ai.edge.gallery.GalleryApplication"
-    manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
+    manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_phoneagent"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -156,4 +157,39 @@ dependencies {
   implementation(project(":telemetry-stub"))
   // SkillManager uses DocumentFile, which used to arrive transitively through Firebase.
   implementation(libs.androidx.documentfile)
+}
+
+// PhoneAgent: "ci" build type for the APKs that CI publishes. It installs next to a local debug
+// build (".dev" suffix) and is release-like (not debuggable). It is signed with the keystore named
+// by PHONEAGENT_KEYSTORE_FILE (CI decodes the KEYSTORE_B64 secret into it) plus KEYSTORE_PASSWORD,
+// KEY_ALIAS and KEY_PASSWORD; without them it falls back to the debug key.
+val ciKeystore = System.getenv("PHONEAGENT_KEYSTORE_FILE")?.let { file(it) }?.takeIf { it.isFile }
+val ciSigningEnv = listOf("KEYSTORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD").associateWith { System.getenv(it) }
+
+android {
+  signingConfigs {
+    if (ciKeystore != null && ciSigningEnv.values.none { it.isNullOrEmpty() }) {
+      create("ci") {
+        storeFile = ciKeystore
+        storePassword = ciSigningEnv.getValue("KEYSTORE_PASSWORD")
+        keyAlias = ciSigningEnv.getValue("KEY_ALIAS")
+        keyPassword = ciSigningEnv.getValue("KEY_PASSWORD")
+      }
+    }
+  }
+  buildTypes {
+    create("ci") {
+      initWith(getByName("release"))
+      applicationIdSuffix = ".dev"
+      versionNameSuffix = "-ci"
+      matchingFallbacks += listOf("release")
+      signingConfig = signingConfigs.findByName("ci") ?: signingConfigs.getByName("debug")
+    }
+  }
+}
+
+tasks.register("printCiSigning") {
+  description = "Prints which key signs the ci build type (never the secrets themselves)."
+  val usesKeystore = android.signingConfigs.findByName("ci") != null
+  doLast { println(if (usesKeystore) "ci signing: keystore from secrets" else "ci signing: debug key (secrets not set)") }
 }

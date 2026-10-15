@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+ Copyright 2026 The PhoneAgent Authors
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="60"
+    android:viewportHeight="60">
+  <group android:translateX="-24" android:translateY="-24">
+      <!-- PhoneAgent placeholder logo for the top bar (cropped to the glyph). -->
+      <path android:fillColor="#FF2A9D8F" android:fillType="evenOdd" android:pathData="M44,24H64A8,8 0,0 1,72 32V76A8,8 0,0 1,64 84H44A8,8 0,0 1,36 76V32A8,8 0,0 1,44 24ZM44,28A4,4 0,0 0,40 32V76A4,4 0,0 0,44 80H64A4,4 0,0 0,68 76V32A4,4 0,0 0,64 28Z" />
+      <path android:fillColor="#FF2A9D8F" android:pathData="M49.5,73H58.5A1.5,1.5 0,0 1,58.5 76H49.5A1.5,1.5 0,0 1,49.5 73Z" />
+      <path android:fillColor="#FF2A9D8F" android:pathData="M54,39Q55.5,48.5 65,50Q55.5,51.5 54,61Q52.5,51.5 43,50Q52.5,48.5 54,39Z" />
+  </group>
+</vector>
