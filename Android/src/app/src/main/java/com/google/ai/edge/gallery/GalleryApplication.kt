@@ -18,6 +18,7 @@ package com.google.ai.edge.gallery
 
 import android.app.Application
 import com.google.ai.edge.gallery.data.DataStoreRepository
+import com.google.ai.edge.gallery.phoneagent.images.installOfflineImageLoader
 import com.google.ai.edge.gallery.ui.theme.ThemeSettings
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -31,5 +32,8 @@ class GalleryApplication : Application() {
     super.onCreate()
     // Load saved theme.
     ThemeSettings.themeOverride.value = dataStoreRepository.readTheme()
+
+    // PhoneAgent fork: no remote images anywhere in the app (docs/NETWORK.md).
+    installOfflineImageLoader(this)
   }
 }

@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
@@ -27,8 +28,10 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
+import com.google.ai.edge.gallery.phoneagent.images.replaceImagesWithLinks
 import com.google.ai.edge.gallery.ui.theme.customColors
-import com.halilibo.richtext.commonmark.Markdown
+import com.halilibo.richtext.commonmark.CommonmarkAstNodeParser
+import com.halilibo.richtext.markdown.BasicMarkdown
 import com.halilibo.richtext.ui.CodeBlockStyle
 import com.halilibo.richtext.ui.RichTextStyle
 import com.halilibo.richtext.ui.material3.RichText
@@ -73,7 +76,10 @@ fun MarkdownText(
               RichTextStringStyle(linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor))),
           ),
       ) {
-        Markdown(content = text)
+        // PhoneAgent fork: Markdown images become links and are never fetched (docs/NETWORK.md).
+        val parser = remember { CommonmarkAstNodeParser() }
+        val astNode = remember(text) { replaceImagesWithLinks(parser.parse(text)) }
+        BasicMarkdown(astNode)
       }
     }
   }
