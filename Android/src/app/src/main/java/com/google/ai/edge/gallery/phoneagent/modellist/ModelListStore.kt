@@ -36,6 +36,17 @@ const val BUNDLED_MODEL_LIST_ASSET = "phoneagent/model_allowlist_snapshot.json"
 private const val ALLOWLIST_BASE_URL =
   "https://raw.githubusercontent.com/google-ai-edge/gallery/refs/heads/main/model_allowlists"
 
+/**
+ * The upstream model-list version for an app [versionName]: "1.0.20" and "1.0.20-ci" both map to
+ * "1_0_20". Build-type suffixes such as "-ci" are not part of upstream's file names.
+ */
+fun modelListVersion(versionName: String): String =
+  versionName.trim().substringBefore('-').replace(".", "_")
+
+/** The app version the model list belongs to, without build-type suffixes ("1.0.20"). */
+val baseVersionName: String
+  get() = BuildConfig.VERSION_NAME.substringBefore('-')
+
 enum class ModelListSource {
   /** Downloaded by the owner with "Refresh model list". */
   DOWNLOADED,
@@ -76,7 +87,7 @@ class ModelListStore(private val context: Context) {
    * Blocking: call from a background thread.
    */
   fun refresh(): Result<Int> {
-    val url = "$ALLOWLIST_BASE_URL/${BuildConfig.VERSION_NAME.replace(".", "_")}.json"
+    val url = "$ALLOWLIST_BASE_URL/${modelListVersion(BuildConfig.VERSION_NAME)}.json"
     Log.i(TAG, "Owner requested a model list refresh: $url")
     val response = getJsonResponse<ModelAllowlist>(url = url)
     val allowlist = response?.jsonObj

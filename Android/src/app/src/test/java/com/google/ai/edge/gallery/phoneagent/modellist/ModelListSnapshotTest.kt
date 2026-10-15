@@ -21,6 +21,7 @@ import com.google.ai.edge.gallery.data.ModelAllowlist
 import com.google.gson.Gson
 import java.io.File
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -33,7 +34,7 @@ class ModelListSnapshotTest {
   // Unit tests run with the app module (Android/src/app) as the working directory.
   private val snapshot = File("src/main/assets/$BUNDLED_MODEL_LIST_ASSET")
   private val upstream =
-    File("../../../model_allowlists/${BuildConfig.VERSION_NAME.replace(".", "_")}.json")
+    File("../../../model_allowlists/${modelListVersion(BuildConfig.VERSION_NAME)}.json")
 
   @Test
   fun snapshotMatchesUpstreamListForThisVersion() {
@@ -43,6 +44,14 @@ class ModelListSnapshotTest {
       upstream.readBytes(),
       snapshot.readBytes(),
     )
+  }
+
+  @Test
+  fun modelListVersionIgnoresBuildTypeSuffixes() {
+    assertEquals("1_0_20", modelListVersion("1.0.20"))
+    assertEquals("1_0_20", modelListVersion("1.0.20-ci"))
+    assertEquals("1_0_20", modelListVersion("1.0.20-ci-debug"))
+    assertEquals("2_1_0", modelListVersion(" 2.1.0 "))
   }
 
   @Test

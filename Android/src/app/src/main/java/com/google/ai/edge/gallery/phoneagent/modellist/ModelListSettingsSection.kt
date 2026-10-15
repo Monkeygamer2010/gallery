@@ -35,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.google.ai.edge.gallery.BuildConfig
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -64,7 +63,7 @@ fun ModelListSettingsSection() {
     )
     val at = downloadedAt
     Text(
-      if (at == null) "Using the list bundled with this app (${BuildConfig.VERSION_NAME})."
+      if (at == null) "Using the list bundled with this app ($baseVersionName)."
       else "Using the list downloaded on ${formatter.format(Instant.ofEpochMilli(at))}.",
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
