@@ -77,6 +77,7 @@ import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.phoneagent.licenses.LicensesDialog
+import com.google.ai.edge.gallery.phoneagent.modellist.ModelListSettingsSection
 import com.google.ai.edge.gallery.ui.common.ClickableLink
 import com.google.ai.edge.gallery.ui.common.tos.AppTosDialog
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
@@ -302,6 +303,9 @@ fun SettingsDialog(
               }
             }
           }
+
+          // PhoneAgent fork: the model list is fetched only from here (docs/NETWORK.md).
+          ModelListSettingsSection()
 
           // Third party licenses.
           Column(modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
