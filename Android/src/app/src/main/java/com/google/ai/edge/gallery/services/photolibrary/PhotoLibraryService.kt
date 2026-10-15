@@ -23,7 +23,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
-import android.location.Geocoder
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -1041,7 +1040,7 @@ class DefaultPhotoLibraryService(
         }
       }
 
-      // 3. Geocoder lookup for city/state
+      // 3. Location label (PhoneAgent fork: coordinates only, no Geocoder)
       var locationName: String? = null
       if (lat != null && lng != null) {
         locationName = getCityAndState(context, lat!!, lng!!)
@@ -1373,18 +1372,10 @@ class DefaultPhotoLibraryService(
       )
     }
 
-  private fun getCityAndState(context: Context, lat: Double, lng: Double): String? {
-    return try {
-      @Suppress("DEPRECATION") val geocoder = Geocoder(context, Locale.getDefault())
-      @Suppress("DEPRECATION") val addresses = geocoder.getFromLocation(lat, lng, 1)
-      if (!addresses.isNullOrEmpty()) {
-        val addr = addresses[0]
-        val city = addr.locality ?: addr.subAdminArea
-        val region = addr.adminArea ?: addr.countryName
-        if (city != null && region != null) "$city, $region" else city ?: region
-      } else null
-    } catch (e: Exception) {
-      null
-    }
-  }
+  // PhoneAgent fork (privacy contract): no Geocoder. On phones with Google Play services the
+  // platform Geocoder resolves coordinates on Google's servers, so photo locations would leave the
+  // device. The label is the raw coordinates instead.
+  @Suppress("UNUSED_PARAMETER")
+  private fun getCityAndState(context: Context, lat: Double, lng: Double): String? =
+    String.format(Locale.US, "%.4f, %.4f", lat, lng)
 }
