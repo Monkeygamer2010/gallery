@@ -1,15 +1,9 @@
   name: Build Android APK
   
+  # PhoneAgent fork: manual only. build-apk.yml builds the fork; this upstream workflow would
+  # otherwise run on every upstream sync into main.
   on:
     workflow_dispatch:
-    push:
-      branches: [ "main" ]
-      paths:
-        - 'Android/**'
-    pull_request:
-      branches: [ "main" ]
-      paths:
-        - 'Android/**'
   
   jobs:
     build_apk:

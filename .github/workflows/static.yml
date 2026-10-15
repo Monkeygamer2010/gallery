@@ -2,13 +2,8 @@
 name: Deploy static content to Pages
 
 on:
-  # Runs on pushes targeting the default branch
-  push:
-    branches: ["main"]
-    paths:
-      - 'skills/**'
-
-  # Allows you to run this workflow manually from the Actions tab
+  # PhoneAgent fork: manual only. This deploys upstream's skills site to GitHub Pages, which the
+  # fork doesn't host; it would otherwise run on every upstream sync into main.
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages

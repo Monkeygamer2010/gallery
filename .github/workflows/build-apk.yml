@@ -1,0 +1,116 @@
+# PhoneAgent fork: builds the "ci" APK on every push to the working branch and publishes it to a
+# rolling pre-release (tag "phoneagent-ci", replaced on each run). Real release builds are signed
+# locally by the owner; release keys never go on GitHub.
+name: Build PhoneAgent APK
+
+on:
+  push:
+    branches: ["claude/phone-agent**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: Android/src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Android SDK platform 37
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+
+      # Until the signing secrets exist, the ci APK is signed with a debug key. Caching that key
+      # keeps the signature stable between runs so updates install over the previous APK. The
+      # cache expires after 7 days without a build; then reinstall once (or add the secrets).
+      - name: Restore CI debug key
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.android/debug.keystore
+          key: phoneagent-ci-debug-keystore-v1
+
+      - name: Decode signing keystore (only when the secret is set)
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ci.keystore"
+            echo "PHONEAGENT_KEYSTORE_FILE=$RUNNER_TEMP/ci.keystore" >> "$GITHUB_ENV"
+          fi
+
+      # Fails on Firebase / Play services / ML Kit dependencies, on a stale license list and on
+      # MediaPipe references the telemetry stub doesn't cover. Prints every library + license.
+      - name: Privacy guard
+        run: ./gradlew --no-daemon :app:privacyGuard
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :telemetry-stub:testDebugUnitTest
+
+      - name: Build ci APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --no-daemon printCiSigning :app:assembleCi
+
+      - name: Remove decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ci.keystore"
+
+      - name: Collect APK
+        run: |
+          mkdir -p "$RUNNER_TEMP/apk"
+          cp app/build/outputs/apk/ci/*.apk "$RUNNER_TEMP/apk/PhoneAgent-ci.apk"
+          (cd "$RUNNER_TEMP/apk" && sha256sum PhoneAgent-ci.apk > PhoneAgent-ci.apk.sha256)
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: phoneagent-ci-apk
+          path: ${{ runner.temp }}/apk/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-phoneagent-ci
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: phoneagent-ci-apk
+          path: apk
+
+      - name: Replace the rolling pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: phoneagent-ci
+        run: |
+          notes="Automatic build of ${GITHUB_REF_NAME} at ${GITHUB_SHA}. Not a release.
+          Install: download PhoneAgent-ci.apk and open it on the phone (package suffix .dev).
+          SHA-256: $(cut -d' ' -f1 apk/PhoneAgent-ci.apk.sha256)"
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh release create "$TAG" apk/PhoneAgent-ci.apk apk/PhoneAgent-ci.apk.sha256 \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "PhoneAgent CI build (${GITHUB_SHA::7})" --notes "$notes"
