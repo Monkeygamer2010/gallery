@@ -16,24 +16,23 @@
 
 package com.google.ai.edge.gallery
 
-import android.util.Log
-import com.google.firebase.Firebase
-import com.google.firebase.analytics.FirebaseAnalytics
-import com.google.firebase.analytics.analytics
+import android.os.Bundle
 
-private var hasLoggedAnalyticsWarning = false
+/**
+ * PhoneAgent fork: local stand-in for Firebase Analytics, which is removed (docs/NETWORK.md).
+ *
+ * It keeps the two methods upstream call sites use so they compile unchanged. [firebaseAnalytics]
+ * is always null, so `firebaseAnalytics?.logEvent(...)` skips the call and never even builds the
+ * event bundle. Nothing is recorded or sent.
+ */
+class NoOpAnalytics private constructor() {
+  @Suppress("UNUSED_PARAMETER") fun logEvent(name: String, params: Bundle?) {}
 
-val firebaseAnalytics: FirebaseAnalytics?
-  get() =
-    runCatching { Firebase.analytics }
-      .onFailure { exception ->
-        // Firebase.analytics can throw an exception if goolgle-services is not set up, e.g.,
-        // missing google-services.json.
-        if (!hasLoggedAnalyticsWarning) {
-          Log.w("AGAnalyticsFirebase", "Firebase Analytics is not available", exception)
-        }
-      }
-      .getOrNull()
+  @Suppress("UNUSED_PARAMETER") fun setAnalyticsCollectionEnabled(enabled: Boolean) {}
+}
+
+val firebaseAnalytics: NoOpAnalytics?
+  get() = null
 
 enum class GalleryEvent(val id: String) {
   CAPABILITY_SELECT(id = "capability_select"),

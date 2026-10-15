@@ -30,7 +30,6 @@ import com.google.ai.edge.gallery.common.ProjectConfig
 import com.google.ai.edge.gallery.common.SystemPromptHelper
 import com.google.ai.edge.gallery.common.getJsonResponse
 import com.google.ai.edge.gallery.common.getModelStorageDir
-import com.google.ai.edge.gallery.common.isAICoreSupported
 import com.google.ai.edge.gallery.customtasks.common.CustomTask
 import com.google.ai.edge.gallery.data.Accelerator
 import com.google.ai.edge.gallery.data.BackendSpec
@@ -75,7 +74,6 @@ import com.google.ai.edge.gallery.proto.AccessTokenData
 import com.google.ai.edge.gallery.proto.HfModelItemProto
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Theme
-import com.google.ai.edge.gallery.runtime.aicore.AICoreModelDownloader
 import com.google.ai.edge.litertlm.Contents
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -255,7 +253,6 @@ constructor(
       mapOf(
         RuntimeType.UNKNOWN to LiteRtLmModelDownloader(context, downloadRepository),
         RuntimeType.LITERT_LM to LiteRtLmModelDownloader(context, downloadRepository),
-        RuntimeType.AICORE to AICoreModelDownloader(context),
       ),
   )
 
@@ -1314,21 +1311,6 @@ constructor(
 
         Log.d(TAG, "Allowlist: $modelAllowlist")
 
-        val isAICoreAvailable by lazy {
-          Log.d(TAG, "loadModelAllowlist: Checking AICore availability")
-          // Build a fast-lookup set of all supported device models.
-          // This extracts the models from all allowed groups, flattens them into a single stream,
-          // lowercases them for case-insensitive matching, and stores them in a Set.
-          val allowedDeviceModelsSet =
-            modelAllowlist.aicoreRequirements
-              ?.allowedDeviceGroups
-              ?.asSequence()
-              ?.flatMap { it.deviceModels }
-              ?.map { it.lowercase() }
-              ?.toSet()
-          isAICoreSupported(allowedDeviceModelsSet)
-        }
-
         // Convert models in the allowlist.
         Log.d(
           TAG,
@@ -1341,7 +1323,8 @@ constructor(
             continue
           }
 
-          if (allowedModel.runtimeType == RuntimeType.AICORE && !isAICoreAvailable) {
+          // PhoneAgent fork: the AICore runtime (ML Kit GenAI, Play services) is removed.
+          if (allowedModel.runtimeType == RuntimeType.AICORE) {
             continue
           }
 

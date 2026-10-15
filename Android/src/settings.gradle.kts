@@ -26,13 +26,6 @@ pluginManagement {
     mavenCentral()
     gradlePluginPortal()
   }
-  resolutionStrategy {
-    eachPlugin {
-      if (requested.id.id == "com.google.android.gms.oss-licenses-plugin") {
-        useModule("com.google.android.gms:oss-licenses-plugin:0.11.0")
-      }
-    }
-  }
 }
 
 dependencyResolutionManagement {
@@ -47,3 +40,6 @@ dependencyResolutionManagement {
 rootProject.name = "AI Edge Gallery"
 
 include(":app")
+
+// PhoneAgent: no-op replacement for MediaPipe's usage-stats uploader (docs/NETWORK.md).
+include(":telemetry-stub")

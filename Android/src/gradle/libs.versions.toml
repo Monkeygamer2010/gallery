@@ -23,29 +23,26 @@ protobufJavaLite = "4.26.1"
 litertlm = "0.18.0"
 commonmark = "1.0.0-alpha02"
 richtext = "1.0.0-alpha02"
-playServicesTfliteJava = "16.4.0"
-playServicesTfliteGpu= "16.4.0"
 cameraX = "1.4.2"
 netOpenidAppauth = "0.11.1"
 splashscreen = "1.2.0-beta01"
 hilt = "2.60.1"
 hiltNavigation = "1.3.0"
-ossLicenses = "0.11.0"
-playServicesOssLicenses = "17.5.1"
-googleService = "4.4.3"
-firebaseBom = "33.16.0"
 exifinterface = "1.4.1"
 securityCrypto = "1.1.0"
 kotlinReflect = "2.4.0"
 moshi = "1.15.2"
 ksp = "2.3.6"
-mlkit-genai-prompt = "1.0.0-beta2"  # Ref: https://developers.google.com/ml-kit/genai/prompt/android/get-started#configure-project
 mcp = "0.8.0"
 ktor = "3.4.3"
 tasksVision = "1.0.0"
 tasksRetrieval = "1.1.0"
 media3 = "1.11.1"
 coil = "2.7.0"
+# PhoneAgent: open-source interfaces used by MediaPipe; the uploader is stubbed (docs/NETWORK.md).
+transportApi = "3.1.0"
+# PhoneAgent: used by SkillManager; previously arrived transitively through Firebase.
+documentfile = "1.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -75,9 +72,6 @@ androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "w
 litertlm = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 commonmark = { group = "com.halilibo.compose-richtext", name = "richtext-commonmark", version.ref = "commonmark" }
 richtext = { group = "com.halilibo.compose-richtext", name = "richtext-ui-material3", version.ref = "richtext" }
-tflite = { group = "com.google.android.gms", name = "play-services-tflite-java", version.ref = "playServicesTfliteJava" }
-tflite-gpu = { group = "com.google.android.gms", name = "play-services-tflite-gpu", version.ref = "playServicesTfliteGpu" }
-tflite-support = { group = "com.google.android.gms", name = "play-services-tflite-support", version.ref = "playServicesTfliteJava" }
 camerax-core = { group = "androidx.camera", name = "camera-core", version.ref = "cameraX"}
 camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX"}
 camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX"}
@@ -90,16 +84,9 @@ hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt"
 hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hiltNavigation" }
 hilt-android-testing = { module = "com.google.dagger:hilt-android-testing", version.ref = "hilt" }
 hilt-android-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
-play-services-oss-licenses = { module = "com.google.android.gms:play-services-oss-licenses", version.ref = "playServicesOssLicenses"}
-firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
-# When using the Firebase BoM, you don't specify versions in Firebase
-# library dependencies.
-firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
-firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshi" }
 moshi-kotlin-codegen = { group = "com.squareup.moshi", name = "moshi-kotlin-codegen", version.ref = "moshi" }
-mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", version.ref = "mlkit-genai-prompt" }
 mcp-kotlin-sdk = { group = "io.modelcontextprotocol", name = "kotlin-sdk", version.ref = "mcp" }
 ktor-client-android = { group = "io.ktor", name = "ktor-client-android", version.ref = "ktor" }
 ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
@@ -109,6 +96,8 @@ androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplaye
 androidx-media3-transformer = { group = "androidx.media3", name = "media3-transformer", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+transport-api = { group = "com.google.android.datatransport", name = "transport-api", version.ref = "transportApi" }
+androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -117,6 +106,5 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "serializationPlugin" }
 protobuf = {id = "com.google.protobuf", version.ref = "protobuf"}
 hilt-application = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
-oss-licenses = {id = "com.google.android.gms.oss-licenses-plugin", version.ref = "ossLicenses"}
-google-services = { id = "com.google.gms.google-services", version.ref = "googleService" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+android-library = { id = "com.android.library", version.ref = "agp" }

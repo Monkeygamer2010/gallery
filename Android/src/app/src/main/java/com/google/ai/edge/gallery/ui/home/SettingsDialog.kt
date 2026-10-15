@@ -16,10 +16,8 @@
 
 package com.google.ai.edge.gallery.ui.home
 
-import com.google.android.gms.oss.licenses.OssLicensesMenuActivity
 import android.app.UiModeManager
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.annotation.StringRes
 import androidx.compose.foundation.border
@@ -52,7 +50,6 @@ import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -79,6 +76,7 @@ import androidx.compose.ui.window.Dialog
 import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.proto.Theme
+import com.google.ai.edge.gallery.phoneagent.licenses.LicensesDialog
 import com.google.ai.edge.gallery.ui.common.ClickableLink
 import com.google.ai.edge.gallery.ui.common.tos.AppTosDialog
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
@@ -101,7 +99,6 @@ fun SettingsDialog(
   onDismissed: () -> Unit,
 ) {
   var selectedTheme by remember { mutableStateOf(curThemeOverride) }
-  var selectedFirebaseAnalytics by remember { mutableStateOf(curFirebaseAnalytics) }
   var hfToken by remember { mutableStateOf(modelManagerViewModel.getTokenStatusAndData().data) }
   val dateFormatter = remember {
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -113,6 +110,7 @@ fun SettingsDialog(
   val focusRequester = remember { FocusRequester() }
   val interactionSource = remember { MutableInteractionSource() }
   var showTos by remember { mutableStateOf(false) }
+  var showLicenses by remember { mutableStateOf(false) }
 
   Dialog(onDismissRequest = onDismissed) {
     val focusManager = LocalFocusManager.current
@@ -200,34 +198,6 @@ fun SettingsDialog(
               }
             }
           }
-
-            Row(
-              modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-              Column(
-                modifier = Modifier.weight(1f).padding(end = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-              ) {
-                Text(
-                  stringResource(R.string.settings_dialog_firebase_analytics_title),
-                  style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
-                )
-                Text(
-                  stringResource(R.string.settings_dialog_firebase_analytics_description),
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              Switch(
-                checked = selectedFirebaseAnalytics,
-                onCheckedChange = { checked ->
-                  selectedFirebaseAnalytics = checked
-                  modelManagerViewModel.saveFirebaseAnalytics(checked)
-                },
-              )
-            }
 
           // HF Token management.
           Column(
@@ -339,14 +309,8 @@ fun SettingsDialog(
               stringResource(R.string.third_party_libraries),
               style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
             )
-            OutlinedButton(
-              onClick = {
-                // Create an Intent to launch a license viewer that displays a list of
-                // third-party library names. Clicking a name will show its license content.
-                val intent = Intent(context, OssLicensesMenuActivity::class.java)
-                context.startActivity(intent)
-              }
-            ) {
+            // PhoneAgent fork: static, offline licenses screen (replaces Play services oss-licenses).
+            OutlinedButton(onClick = { showLicenses = true }) {
               Text(stringResource(R.string.view_licenses))
             }
           }
@@ -389,6 +353,10 @@ fun SettingsDialog(
 
   if (showTos) {
     AppTosDialog(onTosAccepted = { showTos = false }, viewingMode = true)
+  }
+
+  if (showLicenses) {
+    LicensesDialog(onDismissed = { showLicenses = false })
   }
 }
 

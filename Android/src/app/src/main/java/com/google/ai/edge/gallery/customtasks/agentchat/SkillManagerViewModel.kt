@@ -25,7 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.LocalLibrary
 import androidx.compose.material.icons.outlined.Map
-import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material.icons.outlined.SentimentVerySatisfied
 import androidx.lifecycle.ViewModel
@@ -59,12 +58,6 @@ fun getTryOutChips(context: Context): List<SkillTryOutChip> =
       label = context.getString(R.string.skill_chip_interactive_map_label),
       prompt = "Show me Googleplex on interactive map.",
       skillName = "interactive-map",
-    ),
-    SkillTryOutChip(
-      icon = Icons.Outlined.Notifications,
-      label = context.getString(R.string.skill_chip_schedule_reminder_label),
-      prompt = "Set a daily reminder at 9am to check my schedule for today.",
-      skillName = "schedule-notification",
     ),
     SkillTryOutChip(
       icon = Icons.Outlined.SentimentVerySatisfied,

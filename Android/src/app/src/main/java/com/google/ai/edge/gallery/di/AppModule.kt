@@ -44,7 +44,6 @@ import com.google.ai.edge.gallery.proto.CutoutCollection
 import com.google.ai.edge.gallery.proto.Settings
 import com.google.ai.edge.gallery.proto.Skills
 import com.google.ai.edge.gallery.proto.UserData
-import com.google.ai.edge.gallery.runtime.aicore.AICoreModelDownloader
 import com.squareup.moshi.Moshi
 import dagger.Module
 import dagger.Provides
@@ -221,14 +220,6 @@ internal object AppModule {
     downloadRepository: DownloadRepository,
   ): ModelDownloader {
     return LiteRtLmModelDownloader(context, downloadRepository)
-  }
-
-  @Provides
-  @Singleton
-  @IntoMap
-  @RuntimeTypeKey(RuntimeType.AICORE)
-  fun provideAICoreModelDownloader(@ApplicationContext context: Context): ModelDownloader {
-    return AICoreModelDownloader(context)
   }
 
   @Provides
