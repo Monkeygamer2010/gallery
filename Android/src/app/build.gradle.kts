@@ -23,6 +23,7 @@ plugins {
   alias(libs.plugins.protobuf)
   alias(libs.plugins.hilt.application)
   alias(libs.plugins.ksp)
+  id("phoneagent.privacy-guard")
 }
 
 android {

@@ -15,6 +15,8 @@
  */
 
 pluginManagement {
+  // PhoneAgent: privacy guard plugin (dependency audit, license list, telemetry-stub check).
+  includeBuild("build-logic")
   repositories {
     google {
       content {

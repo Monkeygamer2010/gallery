@@ -29,3 +29,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# PhoneAgent: Kotlin 2.x build caches.
+.kotlin
