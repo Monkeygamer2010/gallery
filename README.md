@@ -1,3 +1,28 @@
+# PhoneAgent (fork of Google AI Edge Gallery)
+
+> **Work in progress, personal project.** PhoneAgent adds a "Phone Agent" to the AI Edge Gallery
+> app: an on-device Gemma 4 model that carries out typed tasks (web tasks first) by driving Firefox
+> and other apps through an Android AccessibilityService. Everything runs on the phone. Not
+> affiliated with Google.
+
+What this fork changes so far (Phase 0):
+
+- **Privacy:** no Firebase, no ML Kit/AICore, no Play services TFLite or oss-licenses, MediaPipe's
+  usage stats stubbed out, no network at startup or idle. See [docs/NETWORK.md](docs/NETWORK.md).
+- **Model list** bundled with the app; fetched from GitHub only via Settings > Refresh model list.
+- **Build guard** (`./gradlew :app:privacyGuard`) and a CI workflow that publishes a test APK to the
+  `phoneagent-ci` pre-release.
+
+Docs: [threat model](SECURITY.md) · [network inventory](docs/NETWORK.md) ·
+[decisions](docs/DECISIONS.md) · [phase log](docs/LEARNINGS.md) · [working agreement](CLAUDE.md) ·
+[NOTICE](NOTICE)
+
+Build: `cd Android/src && ./gradlew assembleDebug` (JDK 21, Android SDK platform 37).
+
+The upstream README follows unchanged.
+
+---
+
 # Google AI Edge Gallery ✨
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
