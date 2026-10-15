@@ -74,13 +74,15 @@ fun TextAndVoiceInput(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    var textInputMode by remember { mutableStateOf(defaultTextInputMode) }
+    // PhoneAgent fork: voice input only with an on-device recognizer (see HoldToDictateViewModel).
+    val voiceAvailable = holdToDictateViewModel.dictationAvailable
+    var textInputMode by remember { mutableStateOf(defaultTextInputMode || !voiceAvailable) }
     var curTextInput by remember { mutableStateOf("") }
 
     LaunchedEffect(clearTextTrigger) { curTextInput = "" }
 
     // An icon button to switch between text and voice input.
-    Box(
+    if (voiceAvailable) Box(
       modifier =
         Modifier.clip(CircleShape)
           .then(

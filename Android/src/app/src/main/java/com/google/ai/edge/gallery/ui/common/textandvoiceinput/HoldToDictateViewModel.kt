@@ -51,7 +51,10 @@ constructor(
     MutableStateFlow(HoldToDictateUiState())
   val uiState: StateFlow<HoldToDictateUiState> = _uiState.asStateFlow()
 
-  private val speechRecognizer: SpeechRecognizer
+  // PhoneAgent fork: on-device recognition only. The default recognizer may send audio to a cloud
+  // service, so it is never used; without an on-device recognizer, dictation is hidden.
+  val dictationAvailable: Boolean = SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+  private val speechRecognizer: SpeechRecognizer?
   private val recognizerIntent: Intent
   private var onRecognitionDone: ((String) -> Unit)? = null
   private var onAmplitudeChanged: ((Int) -> Unit)? = null
@@ -59,8 +62,12 @@ constructor(
   init {
     // Initialize SpeechRecognizer
     speechRecognizer =
-      SpeechRecognizer.createSpeechRecognizer(context).apply {
-        setRecognitionListener(this@HoldToDictateViewModel)
+      if (dictationAvailable) {
+        SpeechRecognizer.createOnDeviceSpeechRecognizer(context).apply {
+          setRecognitionListener(this@HoldToDictateViewModel)
+        }
+      } else {
+        null
       }
 
     // Initialize Intent (used for language/model settings)
@@ -70,18 +77,20 @@ constructor(
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
       }
   }
 
   override fun onCleared() {
-    speechRecognizer.destroy()
+    speechRecognizer?.destroy()
   }
 
   fun startSpeechRecognition(onDone: (String) -> Unit, onAmplitudeChanged: (Int) -> Unit) {
     onRecognitionDone = onDone
     this.onAmplitudeChanged = onAmplitudeChanged
 
-    speechRecognizer.startListening(recognizerIntent)
+    val recognizer = speechRecognizer ?: return
+    recognizer.startListening(recognizerIntent)
     setRecognizedText(text = "")
     setRecognizing(recognizing = true)
   }
@@ -89,7 +98,7 @@ constructor(
   fun stopSpeechRecognition() {
     viewModelScope.launch {
       delay(500)
-      speechRecognizer.stopListening()
+      speechRecognizer?.stopListening()
       setRecognizing(recognizing = false)
     }
   }
