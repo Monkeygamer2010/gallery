@@ -102,7 +102,7 @@ fun ModelDownloadingAnimation(
             }
           }
           if (isPartiallyDownloaded) {
-            sizeLabel = "$sizeLabel (resuming...)"
+            sizeLabel = "$sizeLabel (paused)" // PhoneAgent fork: resumed only on tap
           }
           curDownloadProgress =
             curDownloadStatus.receivedBytes.toFloat() / curDownloadStatus.totalBytes.toFloat()

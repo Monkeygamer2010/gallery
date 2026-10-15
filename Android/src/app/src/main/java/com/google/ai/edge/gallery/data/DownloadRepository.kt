@@ -34,8 +34,10 @@ import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.core.os.bundleOf
 import androidx.lifecycle.Observer
+import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
@@ -44,6 +46,7 @@ import com.google.ai.edge.gallery.AppLifecycleProvider
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.firebaseAnalytics
+import com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy
 import com.google.ai.edge.gallery.worker.DownloadWorker
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -85,6 +88,10 @@ interface DownloadRepository {
 private const val EXTRA_DATA_SUFFIX = "_extra_data"
 
 private const val DOWNLOAD_FROM_GLOBAL_MODEL_MANAGER_TASK_ID = "___"
+
+/** PhoneAgent fork: downloads wait for a network connection instead of failing or retrying. */
+private val PHONEAGENT_DOWNLOAD_CONSTRAINTS =
+  Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
 /**
  * Repository for managing model downloads using WorkManager.
@@ -142,15 +149,21 @@ class DefaultDownloadRepository(
           extraFiles.joinToString(",") { it.downloadFileName },
         )
     }
-    if (model.downloadInfo.accessToken != null) {
+    // PhoneAgent fork: store the token in WorkManager only when a file goes to Hugging Face.
+    val allUrls = listOf(model.downloadInfo.url) + extraFiles.map { it.url }
+    if (
+      model.downloadInfo.accessToken != null && allUrls.any(DownloadPolicy::isHuggingFaceHttpsUrl)
+    ) {
       inputDataBuilder.putString(KEY_MODEL_DOWNLOAD_ACCESS_TOKEN, model.downloadInfo.accessToken)
     }
+    inputDataBuilder.putString(DownloadPolicy.KEY_SESSION_ID, DownloadPolicy.sessionId)
     val inputData = inputDataBuilder.build()
 
     // Create worker request.
     val downloadWorkRequest =
       OneTimeWorkRequestBuilder<DownloadWorker>()
         .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .setConstraints(PHONEAGENT_DOWNLOAD_CONSTRAINTS)
         .setInputData(inputData)
         .addTag("$MODEL_NAME_TAG:${model.name}")
         .addTag("$TASK_ID_TAG:${task?.id ?: ""}")
@@ -198,15 +211,21 @@ class DefaultDownloadRepository(
           extraFiles.joinToString(",") { it.downloadFileName },
         )
         .apply {
-          if (model.downloadInfo.accessToken != null) {
+          // PhoneAgent fork: token only when a file goes to Hugging Face; session-bound work.
+          if (
+            model.downloadInfo.accessToken != null &&
+              extraFiles.any { DownloadPolicy.isHuggingFaceHttpsUrl(it.url) }
+          ) {
             putString(KEY_MODEL_DOWNLOAD_ACCESS_TOKEN, model.downloadInfo.accessToken)
           }
+          putString(DownloadPolicy.KEY_SESSION_ID, DownloadPolicy.sessionId)
         }
         .build()
 
     val downloadWorkRequest =
       OneTimeWorkRequestBuilder<DownloadWorker>()
         .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .setConstraints(PHONEAGENT_DOWNLOAD_CONSTRAINTS)
         .setInputData(inputData)
         .addTag("$MODEL_NAME_TAG:${model.name}$EXTRA_DATA_SUFFIX")
         .addTag("$TASK_ID_TAG:${task?.id ?: ""}")

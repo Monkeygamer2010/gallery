@@ -69,6 +69,7 @@ import com.google.ai.edge.gallery.data.markInitializationStarted
 import com.google.ai.edge.gallery.data.markInitialized
 import com.google.ai.edge.gallery.data.resetInitialization
 import com.google.ai.edge.gallery.firebaseAnalytics
+import com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy
 import com.google.ai.edge.gallery.phoneagent.modellist.ModelListStore
 import com.google.ai.edge.gallery.huggingface.HuggingFaceApiClient
 import com.google.ai.edge.gallery.proto.AccessTokenData
@@ -296,7 +297,10 @@ constructor(
     return initializedBackends[model.name]?.contains(backend) != true
   }
 
-  val authService = AuthorizationService(context)
+  // PhoneAgent fork: created only when the owner starts a Hugging Face login. Creating it binds the
+  // default browser's Custom Tabs service, which upstream did on every cold start.
+  private val authServiceDelegate = lazy { AuthorizationService(context) }
+  val authService: AuthorizationService by authServiceDelegate
   var curAccessToken: String = ""
 
   open fun isDownloadOptionalComponentsEnabled(modelName: String): Boolean {
@@ -312,7 +316,7 @@ constructor(
   }
 
   override fun onCleared() {
-    authService.dispose()
+    if (authServiceDelegate.isInitialized()) authService.dispose()
   }
 
   fun getTaskById(id: String): Task? {
@@ -1234,40 +1238,37 @@ constructor(
 
   private fun processPendingDownloads() {
     // Cancel all pending downloads for the retrieved models.
-    downloadRepository.cancelAll {
-      Log.d(TAG, "All workers are cancelled.")
+    //
+    // PhoneAgent fork (privacy contract): nothing is re-queued at startup. A partially downloaded
+    // model shows a "Resume download" button instead; see resumeDownload().
+    downloadRepository.cancelAll { Log.d(TAG, "All workers are cancelled.") }
+  }
 
-      viewModelScope.launch(Dispatchers.Main) {
-        val checkedModelNames = mutableSetOf<String>()
-        val tokenStatusAndData = getTokenStatusAndData()
-        for (task in uiState.value.tasks) {
-          for (model in task.models) {
-            if (checkedModelNames.contains(model.name)) {
-              continue
-            }
-
-            // Start download for partially downloaded models.
-            val downloadStatus = uiState.value.modelDownloadStatus[model.name]?.status
-            if (downloadStatus == ModelDownloadStatusType.PARTIALLY_DOWNLOADED) {
-              if (
-                tokenStatusAndData.status == TokenStatus.NOT_EXPIRED &&
-                  tokenStatusAndData.data != null
-              ) {
-                model.downloadInfo.accessToken = tokenStatusAndData.data.accessToken
-              }
-              Log.d(TAG, "Sending a new download request for '${model.name}'")
-              downloadRepository.downloadModel(
-                task = task,
-                model = model,
-                onStatusUpdated = this@ModelManagerViewModel::setDownloadStatus,
-              )
-            }
-
-            checkedModelNames.add(model.name)
-          }
-        }
+  /**
+   * PhoneAgent fork: resumes a partially downloaded model when the owner taps "Resume download".
+   *
+   * Unlike [downloadModel], this keeps the partial file so the download continues where it stopped.
+   * Optional extra files are included only if the owner turned them on in this session; otherwise
+   * they stay available through their own download control.
+   */
+  fun resumeDownload(task: Task?, model: Model) {
+    setDownloadStatus(
+      curModel = model,
+      status = ModelDownloadStatus(status = ModelDownloadStatusType.IN_PROGRESS),
+    )
+    val tokenStatusAndData = getTokenStatusAndData()
+    model.downloadInfo.accessToken =
+      tokenStatusAndData.data?.accessToken?.takeIf {
+        tokenStatusAndData.status == TokenStatus.NOT_EXPIRED &&
+          DownloadPolicy.isHuggingFaceHttpsUrl(model.downloadInfo.url)
       }
-    }
+    Log.d(TAG, "Owner resumed the download of '${model.name}'")
+    downloadRepository.downloadModel(
+      task = task,
+      model = model,
+      includeExtraDataFiles = _uiState.value.downloadOptionalComponents[model.name] == true,
+      onStatusUpdated = this::setDownloadStatus,
+    )
   }
 
   fun loadModelAllowlist() {

@@ -262,7 +262,7 @@ fun ModelStatusDetails(
               // }
             }
             if (isPartiallyDownloaded) {
-              sizeLabel = "$sizeLabel (resuming...)"
+              sizeLabel = "$sizeLabel (paused)" // PhoneAgent fork: resumed only on tap
             }
           }
         }

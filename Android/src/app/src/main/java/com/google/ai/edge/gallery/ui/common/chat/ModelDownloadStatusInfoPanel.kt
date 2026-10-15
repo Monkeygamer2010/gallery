@@ -59,9 +59,9 @@ fun ModelDownloadStatusInfoPanel(
   // respective conditions remain true. This prevents UI flickering and provides a smoother
   // user experience.
   val curStatus = modelManagerUiState.modelDownloadStatus[model.name]
+  // PhoneAgent fork: a partial download is paused until the owner taps "Resume download".
   val downloading =
     curStatus?.status == ModelDownloadStatusType.IN_PROGRESS ||
-      curStatus?.status == ModelDownloadStatusType.PARTIALLY_DOWNLOADED ||
       curStatus?.status == ModelDownloadStatusType.UNZIPPING
 
   Column(

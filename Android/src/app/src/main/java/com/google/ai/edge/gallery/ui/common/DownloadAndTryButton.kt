@@ -18,6 +18,7 @@ package com.google.ai.edge.gallery.ui.common
 
 import android.content.Intent
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -85,6 +86,8 @@ import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.isForTestOnly
 import com.google.ai.edge.gallery.huggingface.HuggingFaceApiClient
+import com.google.ai.edge.gallery.phoneagent.auth.HUGGING_FACE_LOGIN_UNAVAILABLE_MESSAGE
+import com.google.ai.edge.gallery.phoneagent.auth.isHuggingFaceLoginConfigured
 import com.google.ai.edge.gallery.ui.common.tos.GemmaTermsOfUseDialog
 import com.google.ai.edge.gallery.ui.common.tos.TosViewModel
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
@@ -165,8 +168,11 @@ fun DownloadAndTryButton(
   val inProgress = downloadStatus == ModelDownloadStatusType.IN_PROGRESS
   val downloadSucceeded = downloadStatus == ModelDownloadStatusType.SUCCEEDED
   val isPartiallyDownloaded = downloadStatus == ModelDownloadStatusType.PARTIALLY_DOWNLOADED
+  // PhoneAgent fork: a partial download is not resumed automatically; the owner taps "Resume".
+  val canResume =
+    isPartiallyDownloaded && model.downloadsViaRepository && !downloadStarted && !inProgress
   val showDownloadProgress =
-    !downloadSucceeded && (downloadStarted || checkingToken || inProgress || isPartiallyDownloaded)
+    !downloadSucceeded && (downloadStarted || checkingToken || inProgress)
 
   val view = LocalView.current
   val completedCd = stringResource(R.string.cd_download_completed)
@@ -273,9 +279,16 @@ fun DownloadAndTryButton(
 
   // Function to kick off the authentication and token exchange flow.
   val startTokenExchange = {
-    val authRequest = modelManagerViewModel.getAuthorizationRequest()
-    val authIntent = modelManagerViewModel.authService.getAuthorizationRequestIntent(authRequest)
-    authResultLauncher.launch(authIntent)
+    // PhoneAgent fork: without real OAuth credentials, don't touch AppAuth or the browser at all.
+    if (!isHuggingFaceLoginConfigured()) {
+      checkingToken = false
+      downloadStarted = false
+      Toast.makeText(context, HUGGING_FACE_LOGIN_UNAVAILABLE_MESSAGE, Toast.LENGTH_LONG).show()
+    } else {
+      val authRequest = modelManagerViewModel.getAuthorizationRequest()
+      val authIntent = modelManagerViewModel.authService.getAuthorizationRequestIntent(authRequest)
+      authResultLauncher.launch(authIntent)
+    }
   }
 
   // A launcher for opening the custom tabs intent for requesting user agreement ack.
@@ -355,6 +368,11 @@ fun DownloadAndTryButton(
         if (!buttonEnabled || checkingToken) {
           return@Button
         }
+        if (canResume) {
+          downloadStarted = true
+          modelManagerViewModel.resumeDownload(task = task, model = model)
+          return@Button
+        }
 
         // Check TOS before downloading.
         if (
@@ -383,7 +401,7 @@ fun DownloadAndTryButton(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         Icon(
-          if (needToDownloadFirst) {
+          if (needToDownloadFirst || canResume) {
             Icons.Outlined.FileDownload
           } else {
             Icons.AutoMirrored.Rounded.ArrowForward
@@ -393,7 +411,13 @@ fun DownloadAndTryButton(
         )
 
         if (!compact) {
-          if (needToDownloadFirst) {
+          if (canResume) {
+            Text(
+              stringResource(R.string.phoneagent_resume_download),
+              color = textColor,
+              style = MaterialTheme.typography.titleMedium,
+            )
+          } else if (needToDownloadFirst) {
             Text(
               stringResource(R.string.download),
               color = textColor,

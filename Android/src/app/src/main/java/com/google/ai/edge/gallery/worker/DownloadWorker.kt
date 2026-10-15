@@ -58,6 +58,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -111,6 +112,13 @@ class DownloadWorker(context: Context, params: WorkerParameters) :
     val totalBytes = inputData.getLong(KEY_MODEL_TOTAL_BYTES, 0L)
     val accessToken = inputData.getString(KEY_MODEL_DOWNLOAD_ACCESS_TOKEN)
 
+    // PhoneAgent fork: never resume work queued by an earlier app process. Without this, the system
+    // scheduler would restart a persisted download in the background (docs/NETWORK.md).
+    if (!DownloadPolicy.mayRunInThisProcess(inputData.getString(DownloadPolicy.KEY_SESSION_ID))) {
+      Log.i(TAG, "Not resuming a download queued by an earlier app session.")
+      return Result.failure()
+    }
+
     return withContext(Dispatchers.IO) {
       if (!isExtraDataOnly && (fileUrl == null || fileName == null)) {
         Result.failure()
@@ -140,9 +148,9 @@ class DownloadWorker(context: Context, params: WorkerParameters) :
             val url = URL(file.url)
 
             val connection = url.openConnection() as HttpURLConnection
-            if (accessToken != null) {
-              Log.d(TAG, "Using access token: ${accessToken.subSequence(0, 10)}...")
-              connection.setRequestProperty("Authorization", "Bearer $accessToken")
+            // PhoneAgent fork: the token goes only to Hugging Face, never to other hosts.
+            DownloadPolicy.authorizationHeaderFor(file.url, accessToken)?.let {
+              connection.setRequestProperty("Authorization", it)
             }
 
             // Prepare output file's dir.
