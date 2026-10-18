@@ -31,12 +31,13 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Content-Security-Policy added to every local skill file while the skill has no network access.
- * `'self'` is the local host only, so fetch, XHR, WebSocket, EventSource, images, scripts, fonts
- * and frames from the internet are refused by the page itself, in addition to
- * [SkillWebViewSandbox.intercept] and `blockNetworkLoads`.
+ * It refuses what [SkillWebViewSandbox.intercept] cannot see or refuse: WebSocket (`ws:`/`wss:`),
+ * plain `http:` and form posts away from the page. `https:` loads are let through to the request
+ * hook on purpose, which refuses and counts them, so the model can be told the skill tried to go
+ * online.
  */
 const val OFFLINE_SKILL_CSP =
-  "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; form-action 'self'; base-uri 'self'"
+  "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; form-action 'self'; base-uri 'self'"
 
 /** WebRTC can open UDP connections that no request hook sees; no skill needs it. */
 private const val REMOVE_WEBRTC_SCRIPT =
