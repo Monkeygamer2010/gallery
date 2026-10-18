@@ -40,6 +40,22 @@ class ToolCallPolicyTest {
   }
 
   @Test
+  fun intentsRunOnlyWhileAnEnabledSkillOffersThem() {
+    val sendEmailSkill = "Call the `run_intent` tool with intent `send_email` and the parameters."
+    assertTrue(ToolCallPolicy.intentOfferedBySkills("send_email", listOf(sendEmailSkill)))
+    assertFalse(ToolCallPolicy.intentOfferedBySkills("send_sms", listOf(sendEmailSkill)))
+    assertFalse("no skills enabled", ToolCallPolicy.intentOfferedBySkills("send_email", emptyList()))
+    assertFalse(
+      "a longer name is not a match",
+      ToolCallPolicy.intentOfferedBySkills("send_email", listOf("use send_email_draft")),
+    )
+    assertTrue(
+      "reading the clock needs no skill",
+      ToolCallPolicy.intentOfferedBySkills("get_current_date_and_time", emptyList()),
+    )
+  }
+
+  @Test
   fun skillsWithNetworkAreConfirmed() {
     assertTrue(ToolCallPolicy.skillNeedsConfirmation(networkAllowed = true))
     assertFalse(ToolCallPolicy.skillNeedsConfirmation(networkAllowed = false))

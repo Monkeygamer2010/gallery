@@ -44,6 +44,16 @@ object ToolCallPolicy {
 
   fun intentNeedsConfirmation(intent: String): Boolean = intent !in INTENTS_WITHOUT_CONFIRMATION
 
+  /**
+   * An intent may run only while an enabled skill's instructions name it, so turning a skill off
+   * also turns off what it can do. Reading the clock needs no skill.
+   */
+  fun intentOfferedBySkills(intent: String, enabledSkillInstructions: List<String>): Boolean {
+    if (intent == "get_current_date_and_time") return true
+    val name = Regex("(?<![A-Za-z0-9_])${Regex.escape(intent)}(?![A-Za-z0-9_])")
+    return enabledSkillInstructions.any { name.containsMatchIn(it) }
+  }
+
   /** Agent Chat skills run without asking only while their "Allow network" switch is off. */
   fun skillNeedsConfirmation(networkAllowed: Boolean): Boolean = networkAllowed
 

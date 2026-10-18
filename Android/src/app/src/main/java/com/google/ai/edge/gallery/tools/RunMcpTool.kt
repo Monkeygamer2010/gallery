@@ -73,7 +73,13 @@ class RunMcpTool(
       // PhoneAgent fork: MCP tools reach the network, so every call is confirmed until Phase 4's
       // policy engine exists; a stored "always allow" is ignored.
       run {
-        val permissionAction = AskMcpToolCallPermissionAction(toolName = toolName, argument = input)
+        // PhoneAgent fork: show which server receives the call.
+        val host = runCatching { java.net.URI(serverState.mcpServer.url).host }.getOrNull()
+        val permissionAction =
+          AskMcpToolCallPermissionAction(
+            toolName = if (host != null) "$toolName (on $host)" else toolName,
+            argument = input,
+          )
         executionContext?.actionChannel?.send(permissionAction)
         val permissionResult = permissionAction.result.await()
         if (permissionResult == PermissionResult.DENY) {

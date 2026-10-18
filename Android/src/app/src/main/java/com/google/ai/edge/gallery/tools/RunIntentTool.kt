@@ -53,6 +53,14 @@ class RunIntentTool(private val context: Context, private val skillsProvider: Sk
         return@runBlocking guardMissingEntityWithSkillFallback(name = intent, type = "Intent")
       }
       Log.d(TAG, "Run intent '$intent'") // PhoneAgent fork: parameters can contain personal data.
+      // PhoneAgent fork: an intent is available only while an enabled skill offers it.
+      val selectedInstructions = skillsProvider.getAvailableSkills().map { it.instructions }
+      if (!ToolCallPolicy.intentOfferedBySkills(intent, selectedInstructions)) {
+        return@runBlocking mapOf(
+          "error" to "No enabled skill offers \"$intent\".",
+          "status" to "failed",
+        )
+      }
       // PhoneAgent fork: calendar and messaging intents are confirmed on every call until Phase 4.
       if (ToolCallPolicy.intentNeedsConfirmation(intent)) {
         val confirmation =

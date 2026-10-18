@@ -122,8 +122,9 @@ class RunJsTool(
       // Check secret. If a skill requires a secret and the secret is not provided, show error.
       var secret = ""
       if (skill.requireSecret) {
+        // PhoneAgent fork: key the secret by the skill that runs, not by the name the model typed.
         val savedSecret =
-          dataStoreRepository.readSecret(key = getSkillSecretKey(skillName = skillName))
+          dataStoreRepository.readSecret(key = getSkillSecretKey(skillName = skill.name))
         if (savedSecret == null || savedSecret.isEmpty()) {
           val action =
             AskInfoToolAction(
@@ -137,7 +138,7 @@ class RunJsTool(
           secret = action.result.await()
           if (secret.isNotEmpty()) {
             dataStoreRepository.saveSecret(
-              key = getSkillSecretKey(skillName = skillName),
+              key = getSkillSecretKey(skillName = skill.name),
               value = secret,
             )
             Log.d(TAG, "Got a secret from the ask info dialog.") // PhoneAgent fork: never log secrets
