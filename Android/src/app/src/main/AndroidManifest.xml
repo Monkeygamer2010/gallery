@@ -80,15 +80,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- This is for deep linking -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data android:scheme="com.google.ai.edge.gallery" />
-            </intent-filter>
+            <!-- PhoneAgent fork: upstream's com.google.ai.edge.gallery:// deep link filter is
+                 removed, so other apps and web pages cannot open a task or pre-fill a prompt.
+                 The app's own notifications open these links with explicit intents. -->
         </activity>
 
         <provider
