@@ -16,6 +16,9 @@
 
 package com.google.ai.edge.gallery.customtasks.agentchat
 
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import android.os.Bundle
 import android.util.Log
 import androidx.compose.foundation.clickable
@@ -269,6 +272,10 @@ fun AddMcpServerFromUrlDialog(
               value = headerValue,
               onValueChange = { headerValue = it },
               modifier = Modifier.fillMaxWidth(),
+              // PhoneAgent fork: the header value is a secret; mask it and keep keyboards out.
+              singleLine = true,
+              visualTransformation = PasswordVisualTransformation(),
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
               trailingIcon = {
                 if (headerValue.text.isNotEmpty()) {
                   IconButton(onClick = { headerValue = TextFieldValue("") }) {

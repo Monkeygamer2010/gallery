@@ -16,6 +16,8 @@
 
 package com.google.ai.edge.gallery.customtasks.agentchat
 
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
@@ -61,6 +63,9 @@ fun SecretEditorDialog(
           onValueChange = onValueChange,
           visualTransformation =
             if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+          // PhoneAgent fork: a password field, so keyboards neither suggest nor learn it.
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
           leadingIcon = {
             val image = if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff
             // TODO: Replace with string resources.

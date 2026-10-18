@@ -16,6 +16,8 @@
 
 package com.google.ai.edge.gallery.ui.home
 
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import android.app.UiModeManager
 import android.content.Context
 import android.content.pm.PackageManager
@@ -87,7 +89,6 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.min
 
 private val THEME_OPTIONS = listOf(Theme.THEME_AUTO, Theme.THEME_LIGHT, Theme.THEME_DARK)
 
@@ -209,11 +210,11 @@ fun SettingsDialog(
               "HuggingFace access token",
               style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
             )
-            // Show the start of the token.
+            // PhoneAgent fork: never show any part of the token.
             val curHfToken = hfToken
             if (curHfToken != null && curHfToken.accessToken.isNotEmpty()) {
               Text(
-                curHfToken.accessToken.substring(0, min(16, curHfToken.accessToken.length)) + "...",
+                "Saved (hidden)",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -256,7 +257,10 @@ fun SettingsDialog(
               BasicTextField(
                 value = customHfToken,
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                // PhoneAgent fork: masked, and a password field so keyboards do not learn it.
+                keyboardOptions =
+                  KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                visualTransformation = PasswordVisualTransformation(),
                 keyboardActions = KeyboardActions(onDone = { handleSaveToken() }),
                 modifier =
                   Modifier.fillMaxWidth()
