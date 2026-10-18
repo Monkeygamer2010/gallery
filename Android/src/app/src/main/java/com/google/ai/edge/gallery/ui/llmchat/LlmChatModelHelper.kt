@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.ui.llmchat
 
+import com.google.ai.edge.gallery.phoneagent.os.limitNativeEngineLogging
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
@@ -196,6 +197,7 @@ object LlmChatModelHelper : LlmModelHelper {
       ExperimentalFlags.enableBenchmark = enableBenchmark
       ExperimentalFlags.enableSpeculativeDecoding = speculativeDecoding
       Log.d(TAG, "Speculative decoding enabled: $speculativeDecoding")
+      limitNativeEngineLogging() // PhoneAgent fork: native engine logs only errors in release/ci
       val engine = Engine(engineConfig)
       try {
         engine.initialize()
