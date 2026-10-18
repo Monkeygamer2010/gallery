@@ -131,9 +131,9 @@ limitations under the License.
         };
 
         if (showDashboard) {
-          let url = `dashboard.html?date=${date}`;
+          let url = `dashboard.html?date=${encodeURIComponent(date)}`;
           if (input.days) {
-            url += `&days=${input.days}`;
+            url += `&days=${encodeURIComponent(input.days)}`;
           }
           response.webview = { url: url };
         }

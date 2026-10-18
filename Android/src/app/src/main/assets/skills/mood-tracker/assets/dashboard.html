@@ -384,8 +384,14 @@ limitations under the License.
     let currentDate = new Date();
 
     const urlParams = new URLSearchParams(window.location.search);
-    const urlDateString = urlParams.get('date');
-    const plotDays = parseInt(urlParams.get('days')) || 0;
+    // PhoneAgent fork: URL parameters come from the model; accept only a date and a day count.
+    const rawDate = urlParams.get('date');
+    const urlDateString = /^\d{4}-\d{2}-\d{2}$/.test(rawDate || '') ? rawDate : null;
+    const plotDays = Math.min(Math.max(parseInt(urlParams.get('days')) || 0, 0), 366);
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
 
     if (urlDateString) {
       currentDate = parseISODate(urlDateString);
@@ -449,11 +455,13 @@ limitations under the License.
           const dateObj = parseISODate(d);
           const dateLabel = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
+          // PhoneAgent fork: stored entries come from the model; escape them.
+          const score = Number(item.score) || 0;
           li.innerHTML = `
-            <div class="history-date">${dateLabel}</div>
-            <div class="history-score-pill" style="background: hsl(${(item.score-1)*12}, 70%, 60%)">${item.score}</div>
-            <div class="history-comment">${item.comment || 'No notes.'}</div>
-            <button class="delete-btn" onclick="deleteEntry('${d}')" title="Delete entry">
+            <div class="history-date">${escapeHtml(dateLabel)}</div>
+            <div class="history-score-pill" style="background: hsl(${(score-1)*12}, 70%, 60%)">${escapeHtml(score)}</div>
+            <div class="history-comment">${escapeHtml(item.comment || 'No notes.')}</div>
+            <button class="delete-btn" onclick="deleteEntry('${/^\d{4}-\d{2}-\d{2}$/.test(d) ? d : ''}')" title="Delete entry">
                 <svg fill="currentColor" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
             </button>
           `;

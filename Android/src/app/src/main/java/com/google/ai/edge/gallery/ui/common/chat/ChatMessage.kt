@@ -374,6 +374,8 @@ class ChatMessageWebView(
   val aspectRatio: Float,
   override val side: ChatSide = ChatSide.AGENT,
   override val hideSenderLabel: Boolean = false,
+  // PhoneAgent fork: the producing skill's "Allow network" switch.
+  val allowNetwork: Boolean = false,
 ) :
   ChatMessage(
     type = ChatMessageType.WEBVIEW,
@@ -388,6 +390,7 @@ class ChatMessageWebView(
       aspectRatio = aspectRatio,
       side = side,
       hideSenderLabel = hideSenderLabel,
+      allowNetwork = allowNetwork,
     )
   }
 }

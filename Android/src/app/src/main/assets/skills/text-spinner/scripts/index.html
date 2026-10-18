@@ -30,7 +30,7 @@ limitations under the License.
         const jsonObj = JSON.parse(data);
         return JSON.stringify({
           webview: {
-            url: `webview.html?label=${jsonObj.label}`
+            url: `webview.html?label=${encodeURIComponent(String(jsonObj.label ?? '').slice(0, 200))}`
           }
         })
       };

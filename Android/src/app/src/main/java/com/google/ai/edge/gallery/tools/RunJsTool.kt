@@ -19,6 +19,9 @@ package com.google.ai.edge.gallery.tools
 import android.util.Log
 import com.google.ai.edge.gallery.common.LOCAL_URL_BASE
 import com.google.ai.edge.gallery.data.DataStoreRepository
+import com.google.ai.edge.gallery.phoneagent.skills.SkillPaths
+import com.google.ai.edge.gallery.phoneagent.skills.isRemote
+import com.google.ai.edge.gallery.proto.Skill
 import com.google.ai.edge.gallery.skills.SkillsProvider
 import com.google.ai.edge.gallery.skills.getJsSkillUrl
 import com.google.ai.edge.gallery.skills.getJsSkillWebviewUrl
@@ -38,6 +41,8 @@ fun getSkillSecretKey(skillName: String): String {
 class RunJsTool(
   private val skillsProvider: SkillsProvider,
   private val dataStoreRepository: DataStoreRepository,
+  // PhoneAgent fork: the per-skill "Allow network" switch; off unless the owner turned it on.
+  private val isNetworkAllowed: (Skill) -> Boolean = { false },
 ) : ToolDefinition {
   override val alwaysAllow: Boolean = true
   override var executionContext: ToolExecutionContext? = null
@@ -57,11 +62,8 @@ class RunJsTool(
     data: String,
   ): Map<String, Any> {
     return runBlocking(Dispatchers.Default) {
-      Log.d(
-        TAG,
-        "runJS tool called with:" +
-          "\n- skillName: ${skillName}\n- scriptName: ${scriptName}\n- data: ${data}\n",
-      )
+      // PhoneAgent fork: never log the data; it can contain screen contents.
+      Log.d(TAG, "runJS tool called")
 
       val skill = skillsProvider.loadSkill(skillName)
 
@@ -76,6 +78,24 @@ class RunJsTool(
           )
         return@runBlocking mapOf(
           "error" to "Skill \"${scriptName}\" not found",
+          "status" to "failed",
+        )
+      }
+
+      // PhoneAgent fork: the script name comes from the model; keep it inside the skill's folder.
+      val allowNetwork = isNetworkAllowed(skill)
+      val safeScriptName = scriptName.trim().ifEmpty { "index.html" }
+      if (!SkillPaths.isSafeRelativePath(safeScriptName)) {
+        return@runBlocking mapOf(
+          "error" to "Invalid script name \"$scriptName\". Use a file name such as index.html.",
+          "status" to "failed",
+        )
+      }
+      if (skill.isRemote && !allowNetwork) {
+        return@runBlocking mapOf(
+          "error" to
+            "Skill \"${skill.name}\" is loaded from the internet and network access is off for it. " +
+              "Tell the user they can turn on \"Allow network\" for this skill in the skill manager.",
           "status" to "failed",
         )
       }
@@ -101,7 +121,7 @@ class RunJsTool(
               key = getSkillSecretKey(skillName = skillName),
               value = secret,
             )
-            Log.d(TAG, "Got Secret from ask info dialog: ${secret.substring(0, 3)}")
+            Log.d(TAG, "Got a secret from the ask info dialog.") // PhoneAgent fork: never log secrets
           } else {
             Log.d(TAG, "The ask info dialog got cancelled. No secret.")
           }
@@ -112,11 +132,11 @@ class RunJsTool(
 
       // Get the url for the skill.
       val url =
-        skill.getJsSkillUrl(scriptName = scriptName)
+        skill.getJsSkillUrl(scriptName = safeScriptName)
           ?: return@runBlocking mapOf(
             "result" to "JS Skill URL not set properly or skill not found"
           )
-      Log.d(TAG, "Calling JS script.\n- url: $url\n- data: $data")
+      Log.d(TAG, "Calling JS script.")
 
       // Update progress.
       executionContext
@@ -132,9 +152,21 @@ class RunJsTool(
         )
 
       // Actually run it and wait for the result.
-      val action = CallJsToolAction(url = url, data = data.trim().ifEmpty { "{}" }, secret = secret)
+      val action =
+        CallJsToolAction(
+          url = url,
+          data = data.trim().ifEmpty { "{}" },
+          secret = secret,
+          allowNetwork = allowNetwork,
+        )
       executionContext?.actionChannel?.send(action)
       val result = action.result.await()
+      val networkNote =
+        if (!allowNetwork && action.blockedRequests > 0) {
+          "The skill tried to use the network, which is off for it, so its result may be " +
+            "incomplete. The user can turn on \"Allow network\" for skill \"${skill.name}\" in " +
+            "the skill manager."
+        } else null
 
       // Try to parse result to CallJsSkillResult.
       val moshi: Moshi = Moshi.Builder().build()
@@ -148,11 +180,11 @@ class RunJsTool(
         resultJson == null ||
           (resultJson.result == null && resultJson.webview == null && resultJson.image == null)
       ) {
-        mapOf("result" to result, "status" to "succeeded")
+        withNote(mapOf("result" to result, "status" to "succeeded"), networkNote)
       }
       // Error case.
       else if (error != null) {
-        mapOf("error" to error, "status" to "failed")
+        withNote(mapOf("error" to error, "status" to "failed"), networkNote)
       }
       // Non-error cases.
       else {
@@ -163,15 +195,33 @@ class RunJsTool(
           Log.d(TAG, "Got an image response.")
           resultImageToShow = image
         }
+        var webviewNote: String? = null
         if (webview != null) {
           Log.d(TAG, "Got an webview response.")
-          val webviewUrl = skill.getJsSkillWebviewUrl(url = webview.url ?: "")
-          Log.d(TAG, "Webview url: $webviewUrl")
-          resultWebviewToShow = webview.copy(url = webviewUrl)
+          // PhoneAgent fork: a skill page from the internet needs the skill's network switch, and a
+          // local page must stay inside the skill's folder.
+          val requested = webview.url ?: ""
+          val isExternal = requested.startsWith("http://") || requested.startsWith("https://")
+          if (isExternal && !(allowNetwork && requested.startsWith("https://"))) {
+            webviewNote =
+              "The skill wanted to show a web page from the internet, but network access is off " +
+                "for it. The user can turn on \"Allow network\" for skill \"${skill.name}\" in the " +
+                "skill manager."
+          } else if (!isExternal && !SkillPaths.isSafeRelativeUrl(requested)) {
+            webviewNote = "The skill returned an invalid page name, so nothing is shown."
+          } else {
+            val webviewUrl = skill.getJsSkillWebviewUrl(url = requested)
+            resultWebviewToShow = webview.copy(url = webviewUrl, allowNetwork = allowNetwork)
+          }
         }
-        Log.d(TAG, "Result: ${resultJson.result}")
-        mapOf("result" to (resultJson.result ?: ""), "status" to "succeeded")
+        withNote(
+          mapOf("result" to (resultJson.result ?: ""), "status" to "succeeded"),
+          listOfNotNull(networkNote, webviewNote).joinToString(" ").ifEmpty { null },
+        )
       }
     }
   }
 }
+
+private fun withNote(result: Map<String, Any>, note: String?): Map<String, Any> =
+  if (note == null) result else result + ("note" to note)

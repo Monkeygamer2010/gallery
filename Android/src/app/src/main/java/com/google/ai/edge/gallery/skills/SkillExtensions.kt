@@ -45,11 +45,12 @@ fun Skill.getJsSkillUrl(scriptName: String): String? {
     baseUrl = skillUrl
   }
   if (baseUrl.isEmpty()) return null
-  return "$baseUrl/scripts/$scriptName"
+  // PhoneAgent fork: a folder URL is not served locally; use the documented default script.
+  return "$baseUrl/scripts/${scriptName.ifBlank { "index.html" }}"
 }
 
 fun Skill.getJsSkillWebviewUrl(url: String): String {
-  if (url.startsWith("http")) return url
+  if (url.startsWith("https://") || url.startsWith("http://")) return url // PhoneAgent fork
   var baseUrl = ""
   // Construct a local URL for imported skill.
   if (importDirName.isNotEmpty()) {

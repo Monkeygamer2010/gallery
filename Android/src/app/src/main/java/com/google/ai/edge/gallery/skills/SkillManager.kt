@@ -29,6 +29,8 @@ import com.google.ai.edge.gallery.data.AllowedSkill
 import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.SkillAllowlist
 import com.google.ai.edge.gallery.firebaseAnalytics
+import com.google.ai.edge.gallery.phoneagent.skills.SkillNetworkPolicy
+import com.google.ai.edge.gallery.phoneagent.skills.SkillPaths
 import com.google.ai.edge.gallery.proto.Skill
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -382,6 +384,8 @@ constructor(
         if (source.isDirectory) {
           dest.mkdirs()
           for (child in source.listFiles()) {
+            // PhoneAgent fork: a provider's file name must not lead outside the skill folder.
+            if (!SkillPaths.isSafeFileName(child.name)) continue
             val childDest = File(dest, child.name!!)
             copyDocumentFile(child, childDest)
           }
@@ -472,6 +476,7 @@ constructor(
 
     // Update state.
     _skills.update { currentSkills -> currentSkills.filter { it.name != name } }
+    SkillNetworkPolicy(context).forget(skill) // PhoneAgent fork
 
     coroutineScope.launch {
       // Delete imported files from file system.
@@ -515,6 +520,7 @@ constructor(
 
     // Update state.
     _skills.update { currentSkills -> currentSkills.filter { !names.contains(it.name) } }
+    skillsToDelete.forEach { SkillNetworkPolicy(context).forget(it) } // PhoneAgent fork
 
     withContext(Dispatchers.IO) {
       // Delete all imported files from file system.
@@ -660,7 +666,7 @@ constructor(
         }
 
         val normalizedName = name.replace("\\s+".toRegex(), "-")
-        val skillDestDir = context.filesDir.resolve("skills/${normalizedName}")
+        val skillDestDir = context.filesDir.resolve("skills/${SkillPaths.safeDirName(normalizedName)}")
         val scriptDestDir = File(skillDestDir, "scripts")
         // If the directory exists from a previous failed attempt, clear it.
         if (skillDestDir.exists()) {
@@ -702,7 +708,8 @@ constructor(
         val existingSkill = currentSkills[index]
         val oldName = existingSkill.name
         val normalizedNewName = name.replace("\\s+".toRegex(), "-")
-        val newSkillDestDir = context.filesDir.resolve("skills/${normalizedNewName}")
+        val newSkillDestDir =
+          context.filesDir.resolve("skills/${SkillPaths.safeDirName(normalizedNewName)}")
         val newScriptDestDir = File(newSkillDestDir, "scripts")
         val newSkillMdFile = File(newSkillDestDir, "SKILL.md")
 
@@ -759,6 +766,10 @@ constructor(
         // Update state
         _skills.update { skillsList ->
           skillsList.mapIndexed { i, s -> if (i == index) updatedSkill else s }
+        }
+        // PhoneAgent fork: a renamed or moved skill starts with network off.
+        if (updatedSkill.name != existingSkill.name || updatedImportDirName != existingSkill.importDirName) {
+          SkillNetworkPolicy(context).forget(existingSkill)
         }
 
         // Update data store
@@ -901,7 +912,8 @@ constructor(
   }
 
   private fun getSkillDestinationDir(originalImportDirName: String): File {
-    val normalizedDirName = originalImportDirName.replace("\\s+".toRegex(), "-")
+    // PhoneAgent fork: the display name comes from a document provider; keep it a plain name.
+    val normalizedDirName = SkillPaths.safeDirName(originalImportDirName.replace("\\s+".toRegex(), "-"))
     val newImportDirName = "skills/${normalizedDirName}"
     return context.filesDir.resolve(newImportDirName)
   }

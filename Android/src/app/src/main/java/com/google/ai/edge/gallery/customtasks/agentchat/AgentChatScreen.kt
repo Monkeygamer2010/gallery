@@ -262,6 +262,7 @@ fun AgentChatScreen(
                 iframe = iframe,
                 aspectRatio = aspectRatio,
                 hideSenderLabel = true,
+                allowNetwork = webview.allowNetwork,
               ),
           )
           // Clean up.
@@ -343,11 +344,28 @@ fun AgentChatScreen(
                         putString("error_type", "timeout")
                       },
                     )
+                    action.blockedRequests = chatWebViewClient.sandbox.blockedRequests
                     action.result.complete(
                       "{\"error\": \"Skill execution timed out. Please check network connection.\"}"
                     )
                   }
                 }
+
+                // PhoneAgent fork: apply the skill's "Allow network" switch. The previous skill's page
+                // is unloaded first so it never runs with the new setting.
+                val sandbox = chatWebViewClient.sandbox
+                if (sandbox.allowNetwork != action.allowNetwork) {
+                  suspendCancellableCoroutine<Unit> { continuation ->
+                    chatWebViewClient.setPageLoadListener {
+                      chatWebViewClient.setPageLoadListener(null)
+                      continuation.resume(Unit)
+                    }
+                    webViewRef?.loadUrl("about:blank")
+                  }
+                  sandbox.allowNetwork = action.allowNetwork
+                  webViewRef?.let { sandbox.applyTo(it) }
+                }
+                sandbox.resetBlockedCount()
 
                 // Load url.
                 suspendCancellableCoroutine<Unit> { continuation ->
@@ -355,14 +373,15 @@ fun AgentChatScreen(
                     chatWebViewClient.setPageLoadListener(null)
                     continuation.resume(Unit)
                   }
-                  Log.d(TAG, "Loading url: ${action.url}")
+                  Log.d(TAG, "Loading skill page")
                   webViewRef?.loadUrl(action.url)
                 }
 
                 // Execute JS.
                 Log.d(TAG, "Start to run js")
                 chatViewJavascriptInterface.onResultListener = { result ->
-                  Log.d(TAG, "Got result:\n$result")
+                  Log.d(TAG, "Got result") // PhoneAgent fork: results can contain screen contents.
+                  action.blockedRequests = sandbox.blockedRequests
                   action.result.complete(result)
                   val isSuccess = !result.contains("\"error\":")
                   val errorType = if (isSuccess) "" else "js_error"
@@ -466,11 +485,7 @@ fun AgentChatScreen(
               model = model,
               logMessage = logMessage,
             )
-            Log.d(
-              TAG,
-              "${curConsoleMessage.message()} " +
-                "-- From line ${curConsoleMessage.lineNumber()} of ${curConsoleMessage.sourceId()}",
-            )
+            // PhoneAgent fork: console text can contain screen contents; it is shown, not logged.
           }
         },
       )

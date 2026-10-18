@@ -37,9 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.webkit.WebViewAssetLoader
-import com.google.ai.edge.gallery.common.LOCAL_URL_BASE
-import java.io.File
+import com.google.ai.edge.gallery.phoneagent.skills.SkillWebViewSandbox
 
 private const val TAG = "AGGalleryWebView"
 private val iframeWrapper =
@@ -61,31 +59,20 @@ private val iframeWrapper =
 /**
  * A base [WebViewClient] for [GalleryWebView] that handles local asset loading and logs page
  * finishing.
+ *
+ * PhoneAgent fork: requests go through [SkillWebViewSandbox], which serves only skill files and
+ * refuses network access unless the skill's "Allow network" switch is on (docs/NETWORK.md).
  */
 open class BaseGalleryWebViewClient(private val context: Context) : WebViewClient() {
-  private val localFileAssetsLoader =
-    WebViewAssetLoader.Builder()
-      .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
-      .addPathHandler("/", WebViewAssetLoader.InternalStoragePathHandler(context, context.filesDir))
-      .build()
+  val sandbox = SkillWebViewSandbox(context)
 
   override fun shouldInterceptRequest(
     view: WebView?,
     request: WebResourceRequest?,
-  ): WebResourceResponse? {
-    if (request?.url != null && request.url.toString().startsWith(LOCAL_URL_BASE)) {
-      // Returns 404 if file not exist for imported skills.
-      if (!request.url.toString().startsWith("$LOCAL_URL_BASE/assets/")) {
-        val path = request.url.path ?: ""
-        val localFile = File(context.filesDir, path)
-        if (!localFile.exists() || localFile.isDirectory) {
-          return WebResourceResponse("text/plain", "UTF-8", null)
-        }
-      }
-      return localFileAssetsLoader.shouldInterceptRequest(request.url)
-    }
-    return super.shouldInterceptRequest(view, request)
-  }
+  ): WebResourceResponse? = sandbox.intercept(request)
+
+  override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
+    sandbox.shouldCancelNavigation(request)
 }
 
 /**
@@ -99,6 +86,7 @@ fun GalleryWebView(
   useIframeWrapper: Boolean = false,
   preventParentScrolling: Boolean = false,
   allowRequestPermission: Boolean = false,
+  allowNetwork: Boolean = false,
   onWebViewCreated: ((WebView) -> Unit)? = null,
   onConsoleMessage: ((ConsoleMessage?) -> Unit)? = null,
   onPermissionRequest: ((PermissionRequest?) -> Unit)? = null,
@@ -107,7 +95,8 @@ fun GalleryWebView(
   val context = LocalContext.current
 
   val curWebViewClient = remember {
-    customWebViewClient ?: BaseGalleryWebViewClient(context = context)
+    customWebViewClient
+      ?: BaseGalleryWebViewClient(context = context).also { it.sandbox.allowNetwork = allowNetwork }
   }
   var pendingCameraPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
   var pendingAudioPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
@@ -153,9 +142,13 @@ fun GalleryWebView(
         settings.apply {
           javaScriptEnabled = true
           domStorageEnabled = true
-          allowFileAccess = true
+          allowFileAccess = false
           mediaPlaybackRequiresUserGesture = false
+          // PhoneAgent fork: no network unless the client's sandbox allows it.
+          blockNetworkLoads = true
         }
+        SkillWebViewSandbox.install(this)
+        (curWebViewClient as? BaseGalleryWebViewClient)?.sandbox?.applyTo(this)
 
         if (preventParentScrolling) {
           setOnTouchListener { v, event ->
@@ -167,12 +160,11 @@ fun GalleryWebView(
         webChromeClient =
           object : WebChromeClient() {
             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-              Log.d(
-                TAG,
-                "${consoleMessage?.message()} -- From line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}",
-              )
+              // PhoneAgent fork: console text can contain screen contents; log only where it came from.
+              Log.d(TAG, "console message from line ${consoleMessage?.lineNumber()}")
               onConsoleMessage?.invoke(consoleMessage)
-              return super.onConsoleMessage(consoleMessage)
+              // True stops WebView from also copying the message to logcat.
+              return true
             }
 
             override fun onPermissionRequest(request: PermissionRequest?) {
@@ -220,7 +212,7 @@ fun GalleryWebView(
 
         initialUrl?.let { url ->
           if (useIframeWrapper) {
-            loadDataWithBaseURL(null, iframeWrapper.replace("___", url), "text/html", "UTF-8", null)
+            loadDataWithBaseURL(null, iframeWrapper.replace("___", escapeHtmlAttribute(url)), "text/html", "UTF-8", null)
           } else {
             loadUrl(url)
           }
@@ -234,3 +226,12 @@ fun GalleryWebView(
     },
   )
 }
+
+/** PhoneAgent fork: the URL comes from a skill's result, so it must not break out of the attribute. */
+private fun escapeHtmlAttribute(value: String): String =
+  value
+    .replace("&", "&amp;")
+    .replace("\"", "&quot;")
+    .replace("'", "&#39;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")

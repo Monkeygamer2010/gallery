@@ -46,9 +46,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.phoneagent.skills.SkillNetworkPolicy
+import com.google.ai.edge.gallery.phoneagent.skills.SkillPaths
+import com.google.ai.edge.gallery.phoneagent.skills.isRemote
 import com.google.ai.edge.gallery.proto.Skill
 import com.google.ai.edge.gallery.skills.getJsSkillUrl
 import com.google.ai.edge.gallery.skills.getJsSkillWebviewUrl
@@ -78,6 +82,9 @@ fun SkillTesterBottomSheet(agentTools: AgentTools, skill: Skill, onDismiss: () -
   var running by remember { mutableStateOf(false) }
   var resultImage by remember { mutableStateOf<Bitmap?>(null) }
   var resultWebview by remember { mutableStateOf<CallJsSkillResultWebview?>(null) }
+  // PhoneAgent fork: the tester follows the skill's "Allow network" switch too.
+  val context = LocalContext.current
+  val allowNetwork = remember(skill) { SkillNetworkPolicy(context).isAllowed(skill) }
 
   ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -155,7 +162,12 @@ fun SkillTesterBottomSheet(agentTools: AgentTools, skill: Skill, onDismiss: () -
 
               resultWebview?.let { webview ->
                 val url = webview.url
-                if (url != null) {
+                val isExternal = url != null && (url.startsWith("https://") || url.startsWith("http://"))
+                if (
+                  url != null &&
+                    (if (isExternal) allowNetwork && url.startsWith("https://")
+                    else SkillPaths.isSafeRelativeUrl(url))
+                ) {
                   val finalUrl = skill.getJsSkillWebviewUrl(url = url)
                   MessageBodyWebview(
                     message =
@@ -163,6 +175,7 @@ fun SkillTesterBottomSheet(agentTools: AgentTools, skill: Skill, onDismiss: () -
                         url = finalUrl,
                         iframe = webview.iframe == true,
                         aspectRatio = 1.333f,
+                        allowNetwork = allowNetwork,
                       )
                   )
                 }
@@ -188,8 +201,10 @@ fun SkillTesterBottomSheet(agentTools: AgentTools, skill: Skill, onDismiss: () -
               val url = skill.getJsSkillUrl(scriptName = "")
               if (url == null) {
                 error = "JS skill url not specified"
+              } else if (skill.isRemote && !allowNetwork) {
+                error = "This skill is loaded from the internet. Turn on \"Allow network\" for it first."
               } else {
-                val action = CallJsToolAction(url = url, data = inputData)
+                val action = CallJsToolAction(url = url, data = inputData, allowNetwork = allowNetwork)
                 agentTools.sendToolAction(action)
                 val curResult = action.result.await()
 

@@ -67,7 +67,8 @@ fun MessageBodyWebview(message: ChatMessageWebView, modifier: Modifier = Modifie
       initialUrl = message.url,
       useIframeWrapper = message.iframe,
       preventParentScrolling = true,
-      allowRequestPermission = true,
+      // PhoneAgent fork: camera/microphone requests are denied; network follows the skill's switch.
+      allowNetwork = message.allowNetwork,
     )
     AssistChip(
       onClick = { showBottomSheet = true },
@@ -95,7 +96,7 @@ fun MessageBodyWebview(message: ChatMessageWebView, modifier: Modifier = Modifie
           initialUrl = message.url,
           useIframeWrapper = message.iframe,
           preventParentScrolling = true,
-          allowRequestPermission = true,
+          allowNetwork = message.allowNetwork,
         )
         OutlinedIconButton(
           onClick = {

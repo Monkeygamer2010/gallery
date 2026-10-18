@@ -30,7 +30,8 @@
           }
 
           const topic = params.topic || "Unknown";
-          const lang = params.lang || "en";
+          // PhoneAgent fork: lang becomes part of the host name, so only accept a language code.
+          const lang = /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/.test(String(params.lang || "")) ? params.lang : "en";
           const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
           const searchParams = new URLSearchParams({
             action: "query",

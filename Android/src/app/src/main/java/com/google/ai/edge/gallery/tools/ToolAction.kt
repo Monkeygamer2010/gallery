@@ -50,7 +50,11 @@ class CallJsToolAction(
   val data: String,
   val secret: String = "",
   val result: CompletableDeferred<String> = CompletableDeferred(),
-) : ToolAction(name = ToolActionName.CALL_JS_SKILL) {}
+  // PhoneAgent fork: the skill's "Allow network" switch, and how many requests the sandbox refused.
+  val allowNetwork: Boolean = false,
+) : ToolAction(name = ToolActionName.CALL_JS_SKILL) {
+  @Volatile var blockedRequests: Int = 0
+}
 
 /**
  * Emitted to display an interactive dialog prompting the user for required text information (such
@@ -149,4 +153,6 @@ data class CallJsSkillResultWebview(
   // In the app the webview always takes the full width of the screen. This value is used to
   // calculate the height of the webview. Default is 4:3.
   val aspectRatio: Float?,
+  // PhoneAgent fork: set by the app from the skill's switch, never read from the skill's JSON.
+  @Transient val allowNetwork: Boolean = false,
 )

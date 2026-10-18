@@ -131,6 +131,10 @@ limitations under the License.
           const jsonData = JSON.parse(data);
           if (!jsonData.topic) return JSON.stringify({ error: "No topic provided to search." });
           if (!jsonData.lang) return JSON.stringify({ error: "No language code (lang) provided." });
+          // PhoneAgent fork: lang becomes part of the host name, so only accept a language code.
+          if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})*$/.test(String(jsonData.lang))) {
+            return JSON.stringify({ error: "Invalid language code. Use a code such as en or de." });
+          }
           const wikiResponse = await fetchWikiFuzzyAndInfobox(jsonData.topic, jsonData.lang);
           return JSON.stringify(wikiResponse);
         } catch (e) {

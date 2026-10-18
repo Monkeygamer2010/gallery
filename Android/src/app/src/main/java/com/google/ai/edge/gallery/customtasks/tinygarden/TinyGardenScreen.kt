@@ -93,6 +93,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.webkit.WebViewAssetLoader
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.phoneagent.skills.SkillWebViewSandbox
 import com.google.ai.edge.gallery.data.ConfigKeys
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
@@ -516,9 +517,11 @@ fun MainUi(
                 settings.apply {
                   javaScriptEnabled = true
                   domStorageEnabled = true
-                  allowFileAccess = true
+                  allowFileAccess = false
                   // Needed to play the audio in game without user interaction.
                   mediaPlaybackRequiresUserGesture = false
+                  // PhoneAgent fork: the game is bundled; it never needs the network.
+                  blockNetworkLoads = true
                 }
 
                 webViewClient =
@@ -528,7 +531,9 @@ fun MainUi(
                       request: WebResourceRequest,
                     ): WebResourceResponse? {
                       // Check if the URL should be handled by the asset loader
+                      // PhoneAgent fork: anything not bundled is refused instead of fetched.
                       return assetLoader.shouldInterceptRequest(request.url)
+                        ?: SkillWebViewSandbox.emptyResponse(403, "Blocked")
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {

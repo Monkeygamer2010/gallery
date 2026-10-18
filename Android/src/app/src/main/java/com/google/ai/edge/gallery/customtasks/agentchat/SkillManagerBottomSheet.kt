@@ -109,6 +109,7 @@ import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.common.clearFocusOnKeyboardDismiss
 import com.google.ai.edge.gallery.data.AgentSkillsURLs
+import com.google.ai.edge.gallery.phoneagent.skills.SkillNetworkSwitch
 import com.google.ai.edge.gallery.data.MAX_RECOMMENDED_SKILL_COUNT
 import com.google.ai.edge.gallery.firebaseAnalytics
 import com.google.ai.edge.gallery.proto.Skill
@@ -149,12 +150,7 @@ private val ADD_SKILL_OPTIONS =
       descriptionResId = R.string.add_skill_option_local_description,
       icon = Icons.Outlined.DriveFolderUpload,
     ),
-    AddSkillOption(
-      type = AddSkillOptionType.ViewCommunitySkills,
-      titleResId = R.string.add_skill_option_view_community_skills_title,
-      descriptionResId = R.string.add_skill_option_view_community_skills_description,
-      icon = Icons.AutoMirrored.Outlined.OpenInNew,
-    ),
+    // PhoneAgent fork: "View community skills" (an in-app GitHub page) is hidden.
   )
 
 val BUTTON_CONTENT_PADDING = PaddingValues(start = 12.dp, top = 2.dp, end = 12.dp, bottom = 2.dp)
@@ -1006,6 +1002,8 @@ private fun SkillItemRow(
           }
         }
       }
+
+      SkillNetworkSwitch(skill = skill, enabled = !inMultiSelectMode) // PhoneAgent fork
     }
   }
 }

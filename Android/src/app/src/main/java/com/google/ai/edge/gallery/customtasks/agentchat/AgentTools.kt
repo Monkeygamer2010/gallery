@@ -18,6 +18,7 @@ package com.google.ai.edge.gallery.customtasks.agentchat
 
 import android.content.Context
 import com.google.ai.edge.gallery.data.DataStoreRepository
+import com.google.ai.edge.gallery.phoneagent.skills.SkillNetworkPolicy
 import com.google.ai.edge.gallery.skills.SkillsProvider
 import com.google.ai.edge.gallery.tools.CallJsSkillResultImage
 import com.google.ai.edge.gallery.tools.CallJsSkillResultWebview
@@ -72,7 +73,12 @@ open class AgentToolsImpl : AgentTools {
   }
 
   val runJsTool by lazy {
-    RunJsTool(skillsProvider = skillsProvider, dataStoreRepository = dataStoreRepository)
+    val networkPolicy = SkillNetworkPolicy(context) // PhoneAgent fork: per-skill network switch
+    RunJsTool(
+      skillsProvider = skillsProvider,
+      dataStoreRepository = dataStoreRepository,
+      isNetworkAllowed = networkPolicy::isAllowed,
+    )
   }
 
   val runIntentTool by lazy { RunIntentTool(context = context, skillsProvider = skillsProvider) }
