@@ -20,6 +20,8 @@ import android.content.Context
 import android.util.Log
 import com.google.ai.edge.gallery.intents.IntentAction
 import com.google.ai.edge.gallery.intents.IntentHandler
+import com.google.ai.edge.gallery.phoneagent.confirm.ConfirmToolCallAction
+import com.google.ai.edge.gallery.phoneagent.confirm.ToolCallPolicy
 import com.google.ai.edge.gallery.skills.SkillsProvider
 import com.google.ai.edge.litertlm.Tool
 import com.google.ai.edge.litertlm.ToolParam
@@ -50,7 +52,20 @@ class RunIntentTool(private val context: Context, private val skillsProvider: Sk
         Log.w(TAG, "Intent not found: '$intent'")
         return@runBlocking guardMissingEntityWithSkillFallback(name = intent, type = "Intent")
       }
-      Log.d(TAG, "Run intent. Intent: '$intent', parameters: '$parameters'")
+      Log.d(TAG, "Run intent '$intent'") // PhoneAgent fork: parameters can contain personal data.
+      // PhoneAgent fork: calendar and messaging intents are confirmed on every call until Phase 4.
+      if (ToolCallPolicy.intentNeedsConfirmation(intent)) {
+        val confirmation =
+          ConfirmToolCallAction(title = "Allow \"$intent\"?", details = "Parameters: $parameters")
+        val channel = executionContext?.actionChannel
+        val allowed = channel != null && run {
+          channel.send(confirmation)
+          confirmation.result.await()
+        }
+        if (!allowed) {
+          return@runBlocking mapOf("error" to "The user did not allow this action.", "status" to "failed")
+        }
+      }
       executionContext
         ?.actionChannel
         ?.send(

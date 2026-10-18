@@ -55,10 +55,7 @@ class MobileActionsTools(val onFunctionCalled: (Action) -> Unit) : ToolSet {
     @ToolParam(description = "The phone number of the contact.") phoneNumber: String,
     @ToolParam(description = "The email address of the contact.") email: String,
   ): Map<String, String> {
-    Log.d(
-      TAG,
-      "create contact. First name: '$firstName', last name: '$lastName', phone number: '$phoneNumber', email: '$email'",
-    )
+    Log.d(TAG, "create contact") // PhoneAgent fork: no personal data in logs
 
     onFunctionCalled(
       CreateContactAction(
@@ -85,7 +82,7 @@ class MobileActionsTools(val onFunctionCalled: (Action) -> Unit) : ToolSet {
     @ToolParam(description = "The subject of the email.") subject: String,
     @ToolParam(description = "The body of the email.") body: String,
   ): Map<String, String> {
-    Log.d(TAG, "send email. To: '$to', subject: '$subject', body: '$body'")
+    Log.d(TAG, "send email") // PhoneAgent fork: no personal data in logs
 
     onFunctionCalled(SendEmailAction(to = to, subject = subject, body = body))
 
@@ -101,7 +98,7 @@ class MobileActionsTools(val onFunctionCalled: (Action) -> Unit) : ToolSet {
     )
     location: String
   ): Map<String, String> {
-    Log.d(TAG, "Show location on map. Location: '$location'")
+    Log.d(TAG, "Show location on map")
 
     onFunctionCalled(ShowLocationOnMap(location = location))
 
@@ -125,7 +122,7 @@ class MobileActionsTools(val onFunctionCalled: (Action) -> Unit) : ToolSet {
     datetime: String,
     @ToolParam(description = "The title of the event.") title: String,
   ): Map<String, String> {
-    Log.d(TAG, "Create calendar event. Datetime: '$datetime', title: '$title'")
+    Log.d(TAG, "Create calendar event")
 
     onFunctionCalled(CreateCalendarEventAction(datetime = datetime, title = title))
 

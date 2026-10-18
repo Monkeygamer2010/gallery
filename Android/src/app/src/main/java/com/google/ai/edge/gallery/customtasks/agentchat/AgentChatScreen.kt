@@ -84,6 +84,8 @@ import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.agent.PromptExpander
 import com.google.ai.edge.gallery.common.LOCAL_URL_BASE
 import com.google.ai.edge.gallery.data.AgentSkillsURLs
+import com.google.ai.edge.gallery.phoneagent.confirm.ConfirmToolCallAction
+import com.google.ai.edge.gallery.phoneagent.confirm.ToolCallConfirmationDialog
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
@@ -153,6 +155,7 @@ fun AgentChatScreen(
     mutableStateOf<AskMcpToolCallPermissionAction?>(null)
   }
   var askInfoInputValue by remember { mutableStateOf("") }
+  var currentConfirmAction by remember { mutableStateOf<ConfirmToolCallAction?>(null) }
   var webViewRef: WebView? by remember { mutableStateOf(null) }
   val chatWebViewClient = remember { ChatWebViewClient(context = context) }
   var curSystemPrompt by remember { mutableStateOf(task.defaultSystemPrompt) }
@@ -189,6 +192,7 @@ fun AgentChatScreen(
     onDispose {
       lifecycleOwner.lifecycle.removeObserver(observer)
       mcpManagerViewModel.disconnectAll()
+      currentConfirmAction?.result?.complete(false)
     }
   }
   val uiSystemPrompt by viewModel.uiSystemPrompt.collectAsState()
@@ -478,6 +482,9 @@ fun AgentChatScreen(
             is AskMcpToolCallPermissionAction -> {
               currentMcpPermissionAction = action
             }
+            is ConfirmToolCallAction -> {
+              currentConfirmAction = action
+            }
           }
         }
       }
@@ -672,6 +679,18 @@ fun AgentChatScreen(
           }
         }
         currentMcpPermissionAction = null
+      },
+    )
+  }
+
+  // PhoneAgent fork: calendar, messaging and network tool calls are confirmed every time.
+  currentConfirmAction?.let { action ->
+    ToolCallConfirmationDialog(
+      title = action.title,
+      details = action.details,
+      onResult = { allowed ->
+        action.result.complete(allowed)
+        currentConfirmAction = null
       },
     )
   }

@@ -19,6 +19,8 @@ package com.google.ai.edge.gallery.tools
 import android.util.Log
 import com.google.ai.edge.gallery.common.LOCAL_URL_BASE
 import com.google.ai.edge.gallery.data.DataStoreRepository
+import com.google.ai.edge.gallery.phoneagent.confirm.ConfirmToolCallAction
+import com.google.ai.edge.gallery.phoneagent.confirm.ToolCallPolicy
 import com.google.ai.edge.gallery.phoneagent.skills.SkillPaths
 import com.google.ai.edge.gallery.phoneagent.skills.isRemote
 import com.google.ai.edge.gallery.proto.Skill
@@ -98,6 +100,23 @@ class RunJsTool(
               "Tell the user they can turn on \"Allow network\" for this skill in the skill manager.",
           "status" to "failed",
         )
+      }
+
+      // PhoneAgent fork: a skill with network access is confirmed on every call until Phase 4.
+      if (ToolCallPolicy.skillNeedsConfirmation(allowNetwork)) {
+        val confirmation =
+          ConfirmToolCallAction(
+            title = "Run \"${skill.name}\" with network access?",
+            details = "Script: $safeScriptName\nData: $data",
+          )
+        val channel = executionContext?.actionChannel
+        val allowed = channel != null && run {
+          channel.send(confirmation)
+          confirmation.result.await()
+        }
+        if (!allowed) {
+          return@runBlocking mapOf("error" to "The user did not allow this skill call.", "status" to "failed")
+        }
       }
 
       // Check secret. If a skill requires a secret and the secret is not provided, show error.

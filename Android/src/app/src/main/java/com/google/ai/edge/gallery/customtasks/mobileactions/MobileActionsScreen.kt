@@ -115,6 +115,9 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.phoneagent.confirm.ConfirmToolCallAction
+import com.google.ai.edge.gallery.phoneagent.confirm.ToolCallConfirmationDialog
+import com.google.ai.edge.gallery.phoneagent.confirm.ToolCallPolicy
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.Task
@@ -308,6 +311,8 @@ fun MainUi(
   val focusManager = LocalFocusManager.current
   val resources = LocalResources.current
   val taskColor = getTaskBgGradientColors(task = task)[1]
+  // PhoneAgent fork: contact, calendar, email and map actions wait for the owner's OK.
+  var pendingConfirmation by remember { mutableStateOf<ConfirmToolCallAction?>(null) }
 
   val curDownloadStatus = modelManagerUiState.modelDownloadStatus[model.name]?.status
   setAppBarControlsDisabled(
@@ -324,7 +329,23 @@ fun MainUi(
     }
   }
 
-  DisposableEffect(Unit) { onDispose { viewModel.cleanUp() } }
+  DisposableEffect(Unit) {
+    onDispose {
+      pendingConfirmation?.result?.complete(false)
+      viewModel.cleanUp()
+    }
+  }
+
+  pendingConfirmation?.let { confirmation ->
+    ToolCallConfirmationDialog(
+      title = confirmation.title,
+      details = confirmation.details,
+      onResult = { allowed ->
+        confirmation.result.complete(allowed)
+        pendingConfirmation = null
+      },
+    )
+  }
 
   // Show a loading indicator before the model is initialized.
   if (!isModelInitialized) {
@@ -365,27 +386,45 @@ fun MainUi(
 
           // Execute functions.
           if (curActions.isNotEmpty()) {
-            val errors = mutableListOf<String>()
-            for (action in curActions) {
-              val curError = viewModel.performAction(action = action, context = context)
-              // Always show the recognized function call, even if executing it failed, so users
-              // can see what the model attempted.
-              viewModel.addFunctionCallDetails(
-                details =
-                  genFormattedFunctionCall(action = action, resources = resources, error = curError)
-              )
-              if (curError.isNotEmpty()) {
-                errors.add(curError)
-                viewModel.addActionError(error = curError)
-              }
-            }
-            if (errors.isNotEmpty()) {
-              scope.launch {
-                snackbarHostState.showSnackbar(
-                  errors.joinToString(separator = "; "),
-                  withDismissAction = true,
-                  duration = SnackbarDuration.Long,
+            val actions = curActions.toList()
+            scope.launch(Dispatchers.Main) {
+              val errors = mutableListOf<String>()
+              for (action in actions) {
+                // PhoneAgent fork: ask before actions that touch personal data or leave the phone.
+                val allowed =
+                  !ToolCallPolicy.mobileActionNeedsConfirmation(action.type.name) ||
+                    ConfirmToolCallAction(
+                        title = "Allow \"${action.functionCallDetails.functionName}\"?",
+                        details =
+                          action.functionCallDetails.parameters.joinToString("\n") {
+                            "${it.first}: ${it.second}"
+                          },
+                      )
+                      .also { pendingConfirmation = it }
+                      .result
+                      .await()
+                val curError =
+                  if (allowed) viewModel.performAction(action = action, context = context)
+                  else "not allowed"
+                // Always show the recognized function call, even if executing it failed, so users
+                // can see what the model attempted.
+                viewModel.addFunctionCallDetails(
+                  details =
+                    genFormattedFunctionCall(action = action, resources = resources, error = curError)
                 )
+                if (curError.isNotEmpty()) {
+                  errors.add(curError)
+                  viewModel.addActionError(error = curError)
+                }
+              }
+              if (errors.isNotEmpty()) {
+                scope.launch {
+                  snackbarHostState.showSnackbar(
+                    errors.joinToString(separator = "; "),
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Long,
+                  )
+                }
               }
             }
           }

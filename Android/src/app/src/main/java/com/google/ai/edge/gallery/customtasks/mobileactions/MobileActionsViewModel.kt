@@ -150,7 +150,7 @@ constructor(@ApplicationContext private val appContext: Context) : ViewModel() {
     }
 
     viewModelScope.launch(Dispatchers.Default) {
-      Log.d(TAG, "Start processing user prompt: $userPrompt")
+      Log.d(TAG, "Start processing user prompt")
       setProcessing(processing = true)
       setShowWelcomeMessage(showWelcomeMessage = false)
 
@@ -386,7 +386,7 @@ constructor(@ApplicationContext private val appContext: Context) : ViewModel() {
       ms = zonedDateTime.toInstant().toEpochMilli()
     } catch (e: Exception) {
       // Ignore parsing error.
-      Log.w(TAG, "Failed to parse date time: '$datetime'", e)
+      Log.w(TAG, "Failed to parse date time", e)
     }
 
     val intent =

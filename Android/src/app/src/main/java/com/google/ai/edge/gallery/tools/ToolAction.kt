@@ -26,6 +26,7 @@ enum class ToolActionName() {
   ASK_INFO,
   REQUEST_PERMISSION,
   ASK_MCP_TOOL_CALL_PERMISSION,
+  CONFIRM_TOOL_CALL, // PhoneAgent fork: phoneagent.confirm.ConfirmToolCallAction
 }
 
 /**

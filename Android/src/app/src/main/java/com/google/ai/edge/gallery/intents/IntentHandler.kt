@@ -122,11 +122,11 @@ object IntentHandler {
             context.startActivity(intent)
             "succeeded"
           } else {
-            Log.e(TAG, "Failed to parse send_email parameters: $parameters")
+            Log.e(TAG, "Failed to parse send_email parameters")
             "failed"
           }
         } catch (e: Exception) {
-          Log.e(TAG, "Failed to parse send_email parameters: $parameters", e)
+          Log.e(TAG, "Failed to parse send_email parameters", e)
           "failed"
         }
       }
@@ -142,11 +142,11 @@ object IntentHandler {
             context.startActivity(intent)
             "succeeded"
           } else {
-            Log.e(TAG, "Failed to parse send_sms parameters: $parameters")
+            Log.e(TAG, "Failed to parse send_sms parameters")
             "failed"
           }
         } catch (e: Exception) {
-          Log.e(TAG, "Failed to parse send_sms parameters: $parameters", e)
+          Log.e(TAG, "Failed to parse send_sms parameters", e)
           "failed"
         }
       }
@@ -170,11 +170,11 @@ object IntentHandler {
             context.startActivity(intent)
             "succeeded"
           } else {
-            Log.e(TAG, "Failed to parse create_calendar_event parameters: $parameters")
+            Log.e(TAG, "Failed to parse create_calendar_event parameters")
             "failed"
           }
         } catch (e: Exception) {
-          Log.e(TAG, "Failed to parse create_calendar_event parameters: $parameters", e)
+          Log.e(TAG, "Failed to parse create_calendar_event parameters", e)
           "failed"
         }
       }
@@ -278,15 +278,15 @@ object IntentHandler {
           val responseAdapter = moshi.adapter(ReadCalendarEventsResponse::class.java)
           return responseAdapter.toJson(ReadCalendarEventsResponse(eventsList))
         } else {
-          Log.e(TAG, "Failed to parse read_calendar_events date: ${params.date}")
+          Log.e(TAG, "Failed to parse read_calendar_events date")
           return "failed"
         }
       } else {
-        Log.e(TAG, "Failed to parse read_calendar_events parameters: $parameters")
+        Log.e(TAG, "Failed to parse read_calendar_events parameters")
         return "failed"
       }
     } catch (e: Exception) {
-      Log.e(TAG, "Failed to read calendar events: $parameters", e)
+      Log.e(TAG, "Failed to read calendar events", e)
       return "failed: ${e.message}"
     }
   }
