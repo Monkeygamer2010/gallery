@@ -51,6 +51,8 @@ import androidx.lifecycle.lifecycleScope
 import com.google.ai.edge.gallery.common.PermissionsResultListener
 import com.google.ai.edge.gallery.common.VirtualDevicePermissionsHost
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import com.google.ai.edge.gallery.phoneagent.os.NoKeyboardLearning
+import com.google.ai.edge.gallery.phoneagent.os.optOutOfOsCapture
 import com.google.ai.edge.gallery.ui.theme.GalleryTheme
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.ExperimentalFlags
@@ -80,6 +82,7 @@ class MainActivity : ComponentActivity(), VirtualDevicePermissionsHost {
     // This prevents Jetpack Compose from automatically restoring the previous screen
     // and forces the app to start cleanly on the Home Screen after an OS kill.
     super.onCreate(null)
+    optOutOfOsCapture(this) // PhoneAgent fork: no content capture, autofill or Recents screenshot
 
     fun setContent() {
       if (contentSet) {
@@ -88,6 +91,8 @@ class MainActivity : ComponentActivity(), VirtualDevicePermissionsHost {
 
       setContent {
         GalleryTheme {
+          // PhoneAgent fork: keyboards must not learn from prompts typed here.
+          NoKeyboardLearning {
           Surface(modifier = Modifier.fillMaxSize()) {
             GalleryApp(modelManagerViewModel = modelManagerViewModel)
 
@@ -106,6 +111,7 @@ class MainActivity : ComponentActivity(), VirtualDevicePermissionsHost {
               )
             }
           }
+          } // NoKeyboardLearning
         }
       }
 
