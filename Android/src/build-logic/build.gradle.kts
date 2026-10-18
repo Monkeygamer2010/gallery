@@ -16,7 +16,11 @@
 
 plugins { `kotlin-dsl` }
 
-dependencies { implementation("org.ow2.asm:asm:9.8") }
+dependencies {
+  implementation("org.ow2.asm:asm:9.8")
+  // Provided at runtime by the Android Gradle Plugin the app applies.
+  compileOnly("com.android.tools.build:gradle-api:${libs.versions.agp.get()}")
+}
 
 gradlePlugin {
   plugins {

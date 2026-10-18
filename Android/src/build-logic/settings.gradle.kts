@@ -17,9 +17,12 @@
 // Build logic for the PhoneAgent fork, kept out of upstream's build files.
 dependencyResolutionManagement {
   repositories {
+    google()
     mavenCentral()
     gradlePluginPortal()
   }
+  // Same versions as the app build, so the AGP API matches the plugin that runs.
+  versionCatalogs { create("libs") { from(files("../gradle/libs.versions.toml")) } }
 }
 
 rootProject.name = "build-logic"

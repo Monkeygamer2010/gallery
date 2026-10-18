@@ -88,6 +88,8 @@ class PrivacyGuardPlugin : Plugin<Project> {
         description = "Regenerates the license list shown in the app's licenses screen."
         wire(write = true)
       }
+    registerDebugLogStripping(project)
+
     // The bytecode check reads the class jars of project dependencies (:telemetry-stub), so they
     // must be built first. AGP creates the variant configurations during evaluation.
     project.afterEvaluate {
