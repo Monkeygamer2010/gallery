@@ -42,12 +42,17 @@ import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val TAG = "AGMcpManagerVM"
@@ -83,17 +88,30 @@ constructor(
 
   private val httpClient = HttpClient(Android) { install(SSE) }
 
+  // PhoneAgent fork (docs/NETWORK.md, "MCP"): connections are opened only for servers the owner
+  // enabled, only while Agent Chat is on screen, and closed when it leaves. The lock keeps a
+  // reconnect and a disconnect from racing.
+  private val connectionLock = Mutex()
+  private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
   /**
    * Loads the persisted MCP servers from the DataStore and initializes their client connections.
    */
-  suspend fun loadMcpServers() {
+  suspend fun loadMcpServers() = connectionLock.withLock {
     // 1. Set the loading indicator to signal background restoration is in progress.
     _uiState.update { it.copy(loadingMcpServer = true) }
     withContext(Dispatchers.IO) {
       try {
+        // PhoneAgent fork: replace, never duplicate, any connections that are still open.
+        closeClients(_uiState.value.mcpServers.mapNotNull { it.client })
         // 2. Retrieve the list of configured MCP servers previously saved in DataStore.
         val savedServers = mcpServersDataStore.data.first().mcpServerList
         val loadedStates = savedServers.map { serverProto ->
+          // PhoneAgent fork: a disabled server is never contacted, so its stored auth header is
+          // never sent. It keeps the tools saved from its last connection.
+          if (!serverProto.enabled) {
+            return@map McpServerState(mcpServer = serverProto, client = null, error = null)
+          }
           try {
             // Map existing tool enablement configurations to preserve user preferences upon
             // reconnect.
@@ -264,6 +282,9 @@ constructor(
   /** Removes an MCP server by its URL from both the current UI state and persistent DataStore. */
   fun removeMcpServer(url: String) {
     viewModelScope.launch(Dispatchers.IO) {
+      // PhoneAgent fork: close its connection and forget its stored auth header.
+      closeClients(_uiState.value.mcpServers.filter { it.mcpServer.url == url }.mapNotNull { it.client })
+      userDataDataStore.updateData { it.toBuilder().removeMcpAuths(url).build() }
       mcpServersDataStore.updateData { currentServers ->
         val filtered = currentServers.mcpServerList.filter { it.url != url }
         McpServers.newBuilder().addAllMcpServer(filtered).build()
@@ -314,6 +335,7 @@ constructor(
       persistServers(updatedServers)
       currentState.copy(mcpServers = updatedServers)
     }
+    updateConnection(url, enabled)
   }
 
   /** Enables or disables a specific tool under a given MCP server URL. */
@@ -355,6 +377,9 @@ constructor(
         }
       persistServers(updatedServers)
       currentState.copy(mcpServers = updatedServers)
+    }
+    _uiState.value.mcpServers.filter { it.error == null }.forEach {
+      updateConnection(it.mcpServer.url, enabled)
     }
   }
 
@@ -451,6 +476,101 @@ constructor(
       }
     Log.d(TAG, "Loaded ${mcpTools.size} tools from $url: ${mcpTools.joinToString { it.name }}")
     return Pair(client, mcpTools)
+  }
+
+  /**
+   * PhoneAgent fork: closes every MCP connection. Called when Agent Chat leaves the screen or the app
+   * goes to the background; [reconnectEnabledServers] reopens them when it is back.
+   */
+  fun disconnectAll() {
+    closeScope.launch {
+      connectionLock.withLock {
+        val clients = _uiState.value.mcpServers.mapNotNull { it.client }
+        _uiState.update { state -> state.copy(mcpServers = state.mcpServers.map { it.copy(client = null) }) }
+        closeClients(clients)
+      }
+    }
+  }
+
+  /** PhoneAgent fork: reopens connections to enabled servers after [disconnectAll]. */
+  fun reconnectEnabledServers() {
+    viewModelScope.launch {
+      _uiState.value.mcpServers
+        .filter { it.mcpServer.enabled && it.client == null && it.error == null }
+        .forEach { connect(it.mcpServer.url) }
+    }
+  }
+
+  /** PhoneAgent fork: connects a server when it is enabled and disconnects it when disabled. */
+  private fun updateConnection(url: String, enabled: Boolean) {
+    if (enabled) {
+      viewModelScope.launch { connect(url) }
+    } else {
+      closeScope.launch {
+        connectionLock.withLock {
+          val clients = _uiState.value.mcpServers.filter { it.mcpServer.url == url }.mapNotNull { it.client }
+          _uiState.update { state ->
+            state.copy(
+              mcpServers =
+                state.mcpServers.map { if (it.mcpServer.url == url) it.copy(client = null) else it }
+            )
+          }
+          closeClients(clients)
+        }
+      }
+    }
+  }
+
+  private suspend fun connect(url: String) =
+    connectionLock.withLock {
+      withContext(Dispatchers.IO) {
+        val state = _uiState.value.mcpServers.find { it.mcpServer.url == url }
+        if (state == null || !state.mcpServer.enabled || state.client != null) return@withContext
+        try {
+          val tools = state.mcpServer.toolsList
+          val (client, mcpTools) =
+            initializeClientAndLoadTools(
+              url,
+              tools.associate { it.name to it.enabled },
+              tools.associate { it.name to it.alwaysAllow },
+            )
+          _uiState.update { current ->
+            current.copy(
+              mcpServers =
+                current.mcpServers.map {
+                  if (it.mcpServer.url != url) it
+                  else
+                    it.copy(
+                      mcpServer = it.mcpServer.toBuilder().clearTools().addAllTools(mcpTools).build(),
+                      client = client,
+                      error = null,
+                    )
+                }
+            )
+          }
+        } catch (e: Exception) {
+          if (e is CancellationException) throw e
+          Log.e(TAG, "Error connecting to MCP server", e)
+        }
+      }
+    }
+
+  private suspend fun closeClients(clients: List<Client>) {
+    withContext(NonCancellable) {
+      for (client in clients) {
+        runCatching { client.close() }.onFailure { Log.w(TAG, "Error closing MCP client", it) }
+      }
+    }
+  }
+
+  override fun onCleared() {
+    // PhoneAgent fork: leaving Agent Chat closes every stream and the HTTP client.
+    val clients = _uiState.value.mcpServers.mapNotNull { it.client }
+    closeScope.launch {
+      closeClients(clients)
+      httpClient.close()
+    }
+    super.onCleared()
   }
 
   private fun persistServers(updatedServers: List<McpServerState>) {

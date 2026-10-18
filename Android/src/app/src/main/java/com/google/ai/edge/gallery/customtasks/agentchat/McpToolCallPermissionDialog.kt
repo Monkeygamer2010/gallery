@@ -94,12 +94,7 @@ fun McpToolCallPermissionDialog(
     },
     confirmButton = {
       Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Button(
-          onClick = { onResult(PermissionResult.ALWAYS_ALLOW) },
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Text(stringResource(R.string.mcp_tool_always_allow))
-        }
+        // PhoneAgent fork: no "Always allow" until Phase 4's policy engine; each call is confirmed.
         Button(
           onClick = { onResult(PermissionResult.ALLOW_ONCE) },
           modifier = Modifier.fillMaxWidth(),

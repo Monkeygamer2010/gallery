@@ -58,6 +58,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -167,6 +170,27 @@ fun AgentChatScreen(
     }
 
   LaunchedEffect(task) { viewModel.loadSystemPrompt(task) }
+
+  // PhoneAgent fork: MCP connections stay open only while this screen is visible
+  // (docs/NETWORK.md, "MCP").
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner) {
+    var stopped = false
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_STOP) {
+        stopped = true
+        mcpManagerViewModel.disconnectAll()
+      } else if (event == Lifecycle.Event.ON_START && stopped) {
+        stopped = false
+        mcpManagerViewModel.reconnectEnabledServers()
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      mcpManagerViewModel.disconnectAll()
+    }
+  }
   val uiSystemPrompt by viewModel.uiSystemPrompt.collectAsState()
 
   // Collect UI states from view models. Ensure launched effect is triggered when the UI state is
@@ -633,6 +657,7 @@ fun AgentChatScreen(
       argument = action.argument,
       onResult = { result ->
         action.result.complete(result)
+        // PhoneAgent fork: the dialog no longer offers "Always allow"; every call is confirmed.
         if (result == PermissionResult.ALWAYS_ALLOW) {
           val serverState =
             mcpManagerViewModel.uiState.value.mcpServers.find { serverState ->

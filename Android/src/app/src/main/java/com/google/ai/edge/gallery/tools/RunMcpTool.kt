@@ -47,11 +47,13 @@ class RunMcpTool(
     @ToolParam(description = "The name of the tool to run.") toolName: String,
     @ToolParam(description = "The parameters passed to tool as input") input: String,
   ): Map<String, String> {
-    Log.d(TAG, "Run MCP tool:\n- name: $toolName\n- input: $input")
+    Log.d(TAG, "Run MCP tool") // PhoneAgent fork: the input can contain screen contents.
     return runBlocking(Dispatchers.IO) {
+      // PhoneAgent fork: only tools that are enabled on an enabled server can be called.
       val serverState =
         mcpServersProvider.mcpServers.find { serverState ->
-          serverState.mcpServer.toolsList.any { it.name == toolName }
+          serverState.mcpServer.enabled &&
+            serverState.mcpServer.toolsList.any { it.name == toolName && it.enabled }
         }
 
       if (serverState == null) {
@@ -68,10 +70,9 @@ class RunMcpTool(
 
       // Check if the MCP tool requires user permission. If not always allowed,
       // send an action to ask for permission and wait for the result.
-      val mcpTool = serverState.mcpServer.toolsList.find { it.name == toolName }
-      val isAlwaysAllow = mcpTool?.alwaysAllow ?: false
-
-      if (!isAlwaysAllow) {
+      // PhoneAgent fork: MCP tools reach the network, so every call is confirmed until Phase 4's
+      // policy engine exists; a stored "always allow" is ignored.
+      run {
         val permissionAction = AskMcpToolCallPermissionAction(toolName = toolName, argument = input)
         executionContext?.actionChannel?.send(permissionAction)
         val permissionResult = permissionAction.result.await()
@@ -113,7 +114,7 @@ class RunMcpTool(
         if (result.isError == true) {
           val errorText =
             result.content.filterIsInstance<TextContent>().joinToString("\n") { it.text }
-          Log.e(TAG, "MCP tool \"$toolName\" failed: $errorText")
+          Log.e(TAG, "MCP tool call failed")
           executionContext
             ?.actionChannel
             ?.send(
@@ -129,7 +130,7 @@ class RunMcpTool(
         } else {
           val successText =
             result.content.filterIsInstance<TextContent>().joinToString("\n") { it.text }
-          Log.d(TAG, "MCP tool \"$toolName\" succeeded:\n$successText")
+          Log.d(TAG, "MCP tool call succeeded")
           executionContext
             ?.actionChannel
             ?.send(
