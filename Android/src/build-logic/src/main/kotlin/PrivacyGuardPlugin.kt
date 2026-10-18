@@ -21,14 +21,12 @@ import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.FileCollectionDependency
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.artifacts.dsl.DependencyHandler
 import org.gradle.api.artifacts.result.ResolvedArtifactResult
 import org.gradle.api.attributes.Attribute
-import org.gradle.api.file.ConfigurableFileCollection
-import org.gradle.api.file.RegularFileProperty
-import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.Internal
@@ -38,42 +36,82 @@ import org.gradle.maven.MavenPomArtifact
 import org.w3c.dom.Element
 
 /**
+ * The privacy contract's build-time rules (docs/NETWORK.md). They are constants in build-logic, not
+ * settings, so no build script can loosen them; changing them is a reviewed change to this file.
+ * The only exceptions are the ones the owner approves in docs/NETWORK.md.
+ */
+internal object PrivacyContract {
+  /** Maven groups that must not ship. A group also matches its sub-groups. */
+  val FORBIDDEN_GROUPS =
+    listOf(
+      "com.google.firebase",
+      "com.google.android.gms",
+      "com.google.gms",
+      "com.google.mlkit",
+      "com.google.android.play", // Play Core: in-app updates, reviews, asset delivery, integrity
+      "com.google.ai.edge.aicore", // AICore SDK
+      "com.google.android.ads",
+      "com.google.ads",
+      "com.crashlytics",
+      "io.fabric",
+      "io.sentry",
+      "com.bugsnag",
+      "com.microsoft.appcenter",
+      "com.amplitude",
+      "com.mixpanel",
+      "com.segment.analytics",
+      "com.facebook.android",
+      "com.appsflyer",
+      "com.adjust.sdk",
+      "com.onesignal",
+      "com.newrelic",
+      "com.datadoghq",
+      "io.opentelemetry",
+    )
+
+  /** Single modules that must not ship: Firebase's telemetry uploader, replaced by :telemetry-stub. */
+  val FORBIDDEN_MODULES =
+    setOf(
+      "com.google.android.datatransport:transport-runtime",
+      "com.google.android.datatransport:transport-backend-cct",
+    )
+
+  /** The configurations checked: every variant's compile and runtime classpaths. */
+  val CONFIGURATION_REGEX = Regex("(debug|release|ci)(Compile|Runtime)Classpath")
+
+  /** The configuration whose libraries are listed in the in-app licenses screen. */
+  const val LICENSE_CONFIGURATION = "releaseRuntimeClasspath"
+
+  const val EXCEPTIONS_FILE = "../../docs/NETWORK.md"
+  const val LICENSE_ASSET = "src/main/assets/phoneagent/third_party_licenses.tsv"
+  val ROOT_BUILD_FILES = listOf("settings.gradle.kts", "build.gradle.kts", "gradle.properties", "gradle/libs.versions.toml")
+}
+
+/**
  * Enforces the fork's privacy contract at build time.
  *
- * `privacyGuard` fails when a Firebase, Google Play services or ML Kit artifact (or the
- * google-services / oss-licenses Gradle plugins) shows up in the build, unless the owner approved
- * it in docs/NETWORK.md. It also prints every shipped library with its license (from the Maven
- * POM) and fails when the in-app license list is out of date.
+ * `privacyGuard` fails when a forbidden artifact ([PrivacyContract.FORBIDDEN_GROUPS], the Firebase
+ * telemetry uploader), a local file dependency, or the google-services / oss-licenses Gradle
+ * plugins show up in the build, unless the owner approved it in docs/NETWORK.md. It also prints
+ * every shipped library with its license (from the Maven POM) and fails when the in-app license
+ * list is out of date.
  *
  * `updateThirdPartyLicenses` rewrites that in-app license list.
+ *
+ * `check<Variant>Apk` (see ApkPrivacyCheck.kt) inspects each built APK and runs as part of every
+ * `assemble<Variant>`.
  */
 class PrivacyGuardPlugin : Plugin<Project> {
   override fun apply(project: Project) {
-    val ext = project.extensions.create("privacyGuard", PrivacyGuardExtension::class.java)
     val rootDir = project.rootDir
-    ext.forbiddenGroups.convention(
-      listOf("com.google.firebase", "com.google.android.gms", "com.google.mlkit", "com.google.gms")
-    )
-    ext.configurationRegex.convention("(debug|release|ci)(Compile|Runtime)Classpath")
-    ext.licenseConfiguration.convention("releaseRuntimeClasspath")
-    ext.exceptionsFile.convention(
-      project.layout.file(project.provider { File(rootDir, "../../docs/NETWORK.md") })
-    )
-    ext.licenseAsset.convention(
-      project.layout.projectDirectory.file("src/main/assets/phoneagent/third_party_licenses.tsv")
-    )
-    ext.buildFiles.from(
-      File(rootDir, "settings.gradle.kts"),
-      File(rootDir, "build.gradle.kts"),
-      File(rootDir, "gradle.properties"),
-      File(rootDir, "gradle/libs.versions.toml"),
-      project.buildFile,
-    )
 
     fun PrivacyGuardTask.wire(write: Boolean) {
       group = "verification"
       writeLicenseAsset.set(write)
-      extension = ext
+      exceptionsFile = File(rootDir, PrivacyContract.EXCEPTIONS_FILE)
+      licenseAsset = project.file(PrivacyContract.LICENSE_ASSET)
+      buildFiles = PrivacyContract.ROOT_BUILD_FILES.map { File(rootDir, it) } + project.buildFile
+      report = project.layout.buildDirectory.file("reports/phoneagent/privacy-guard.txt").get().asFile
       configurations = project.configurations
       dependencies = project.dependencies
       allProjects = project.rootProject.allprojects.toList()
@@ -89,36 +127,29 @@ class PrivacyGuardPlugin : Plugin<Project> {
         wire(write = true)
       }
     registerDebugLogStripping(project)
+    registerApkPrivacyChecks(project)
+
+    // A build script could switch the checks off; refuse to run at all if it did.
+    project.gradle.taskGraph.whenReady {
+      val disabled =
+        allTasks.filter { (it is PrivacyGuardTask || it is ApkPrivacyCheckTask) && !it.enabled }
+      if (disabled.isNotEmpty()) {
+        throw GradleException(
+          "Privacy guard: these checks were disabled by a build script: " +
+            disabled.joinToString { it.path } + ". They cannot be turned off."
+        )
+      }
+    }
 
     // The bytecode check reads the class jars of project dependencies (:telemetry-stub), so they
     // must be built first. AGP creates the variant configurations during evaluation.
     project.afterEvaluate {
-      val config = project.configurations.findByName(ext.licenseConfiguration.get()) ?: return@afterEvaluate
+      val config = project.configurations.findByName(PrivacyContract.LICENSE_CONFIGURATION) ?: return@afterEvaluate
       val classJars = classJarsView(config).files
       guard.configure { dependsOn(classJars) }
       update.configure { dependsOn(classJars) }
     }
   }
-}
-
-abstract class PrivacyGuardExtension {
-  /** Maven groups that must not ship. A group also matches its sub-groups. */
-  abstract val forbiddenGroups: ListProperty<String>
-
-  /** Regex of the configurations to check. */
-  abstract val configurationRegex: Property<String>
-
-  /** The configuration whose libraries are listed in the in-app licenses screen. */
-  abstract val licenseConfiguration: Property<String>
-
-  /** Markdown file holding the owner-approved exceptions between the guard markers. */
-  abstract val exceptionsFile: RegularFileProperty
-
-  /** The checked-in license list (TSV) bundled in the app. */
-  abstract val licenseAsset: RegularFileProperty
-
-  /** Build files scanned as text for forbidden plugins and groups. */
-  abstract val buildFiles: ConfigurableFileCollection
 }
 
 private data class Coord(val group: String, val module: String, val version: String) :
@@ -138,7 +169,10 @@ private data class ApprovedException(val group: String, val module: String) {
 abstract class PrivacyGuardTask : DefaultTask() {
   @get:Input abstract val writeLicenseAsset: Property<Boolean>
 
-  @get:Internal lateinit var extension: PrivacyGuardExtension
+  @get:Internal lateinit var exceptionsFile: File
+  @get:Internal lateinit var licenseAsset: File
+  @get:Internal lateinit var buildFiles: List<File>
+  @get:Internal lateinit var report: File
   @get:Internal lateinit var configurations: ConfigurationContainer
   @get:Internal lateinit var dependencies: DependencyHandler
   @get:Internal lateinit var allProjects: List<Project>
@@ -149,16 +183,17 @@ abstract class PrivacyGuardTask : DefaultTask() {
 
   @TaskAction
   fun run() {
-    val forbidden = extension.forbiddenGroups.get()
-    val exceptions = readExceptions(extension.exceptionsFile.get().asFile)
+    val forbidden = PrivacyContract.FORBIDDEN_GROUPS
+    val exceptions = readExceptions(exceptionsFile)
     val violations = mutableListOf<String>()
 
     fun isForbidden(group: String, module: String): Boolean =
-      forbidden.any { group == it || group.startsWith("$it.") } &&
+      (forbidden.any { group == it || group.startsWith("$it.") } ||
+        "$group:$module" in PrivacyContract.FORBIDDEN_MODULES) &&
         exceptions.none { it.matches(group, module) }
 
     // 1. Resolved dependency graphs: the authoritative list of what ships.
-    val regex = Regex(extension.configurationRegex.get())
+    val regex = PrivacyContract.CONFIGURATION_REGEX
     val configs =
       configurations.filter { it.isCanBeResolved && regex.matches(it.name) }.sortedBy { it.name }
     if (configs.isEmpty()) {
@@ -179,6 +214,10 @@ abstract class PrivacyGuardTask : DefaultTask() {
         }
       }
       coordsByConfig[config.name] = coords
+      // Local jars and AARs have no Maven coordinates, so nothing above would see them.
+      for (dependency in config.allDependencies.withType(FileCollectionDependency::class.java)) {
+        violations += "${config.name}: file dependency ${dependency.files.files.map { it.name }}"
+      }
     }
 
     // 2. Plugins: google-services must never be applied anywhere.
@@ -190,7 +229,7 @@ abstract class PrivacyGuardTask : DefaultTask() {
 
     // 3. Build files as text: catches declared-but-unused libraries and plugins.
     val textPatterns = forbidden.map { Regex(Regex.escape(it)) } + Regex("google-services|oss-licenses")
-    for (file in extension.buildFiles.files.filter { it.isFile }) {
+    for (file in buildFiles.filter { it.isFile }) {
       file.readLines().forEachIndexed { index, line ->
         if (textPatterns.none { it.containsMatchIn(line) }) return@forEachIndexed
         // Exclusions remove dependencies; they are how the build keeps Firebase out.
@@ -201,7 +240,7 @@ abstract class PrivacyGuardTask : DefaultTask() {
     }
 
     // 4. Bytecode: everything MediaPipe calls in the stubbed telemetry packages must exist.
-    val licenseConfig = extension.licenseConfiguration.get()
+    val licenseConfig = PrivacyContract.LICENSE_CONFIGURATION
     val classesConfig =
       configs.firstOrNull { it.name == licenseConfig }
         ?: throw GradleException("privacyGuard: configuration $licenseConfig was not checked")
@@ -228,7 +267,7 @@ abstract class PrivacyGuardTask : DefaultTask() {
 
     val shipped = coordsByConfig[licenseConfig]
       ?: throw GradleException("privacyGuard: configuration $licenseConfig was not checked")
-    val asset = extension.licenseAsset.get().asFile
+    val asset = licenseAsset
     val expected = renderLicenseAsset(shipped, licenses)
     if (writeLicenseAsset.get()) {
       asset.parentFile.mkdirs()
@@ -248,7 +287,11 @@ abstract class PrivacyGuardTask : DefaultTask() {
           "Run ./gradlew :app:updateThirdPartyLicenses and commit the result."
       )
     }
-    logger.lifecycle("Privacy guard passed: no forbidden dependencies in ${configs.joinToString { it.name }}.")
+    val passed = "Privacy guard passed: no forbidden dependencies in ${configs.joinToString { it.name }}."
+    logger.lifecycle(passed)
+    // CI checks this file, so a run that was skipped or never happened cannot look like a pass.
+    report.parentFile.mkdirs()
+    report.writeText("PASSED\n$passed\n")
   }
 
   private fun readExceptions(file: File): List<ApprovedException> {

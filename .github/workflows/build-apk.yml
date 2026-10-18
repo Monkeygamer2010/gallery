@@ -54,8 +54,9 @@ jobs:
             echo "PHONEAGENT_KEYSTORE_FILE=$RUNNER_TEMP/ci.keystore" >> "$GITHUB_ENV"
           fi
 
-      # Fails on Firebase / Play services / ML Kit dependencies, on a stale license list and on
-      # MediaPipe references the telemetry stub doesn't cover. Prints every library + license.
+      # Fails on forbidden dependencies (Firebase, Play services, Play Core, ML Kit, AICore,
+      # analytics SDKs), local file dependencies, a stale license list and on MediaPipe references
+      # the telemetry stub doesn't cover. Prints every library + license.
       - name: Privacy guard
         run: ./gradlew --no-daemon :app:privacyGuard
 
@@ -68,6 +69,17 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew --no-daemon printCiSigning :app:assembleCi
+
+      # assembleCi also runs checkCiApk: forbidden classes, native network imports, leftover debug
+      # logging and merged-manifest rules. Both checks write a report only when they ran and
+      # passed, so a check that was skipped or switched off cannot look like a pass.
+      - name: Verify privacy reports
+        run: |
+          for r in app/build/reports/phoneagent/privacy-guard.txt app/build/reports/phoneagent/apk-check-ci.txt; do
+            test -f "$r" || { echo "::error::missing $r"; exit 1; }
+            head -n 1 "$r" | grep -qx PASSED || { echo "::error::$r did not pass"; cat "$r"; exit 1; }
+          done
+          cat app/build/reports/phoneagent/apk-check-ci.txt
 
       - name: Remove decoded keystore
         if: always()
