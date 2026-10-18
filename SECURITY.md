@@ -33,12 +33,24 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[done]** Firebase, ML Kit/AICore, Play services TFLite and oss-licenses removed; MediaPipe's
   usage-stats uploader replaced by a no-op stub; no network at startup or idle
   (`docs/NETWORK.md`).
-- **[done]** `privacyGuard` build check fails on Firebase / Play services / ML Kit dependencies,
-  on the google-services plugin, and on MediaPipe references the stub doesn't cover. It runs in CI.
+- **[done]** `privacyGuard` build check fails on Firebase / Play services / Play Core / ML Kit /
+  AICore / common analytics dependencies, local file dependencies, the google-services plugin,
+  and MediaPipe references the stub doesn't cover. `check<Variant>Apk` inspects every built APK
+  (dex classes, native imports, leftover debug logging, merged manifest). The rules are constants
+  in build-logic; CI requires both pass reports.
+- **[done]** Skill WebViews: no network unless the owner turns on a skill's "Allow network"
+  switch, no access to app-private files, no WebRTC, camera and microphone denied, model-chosen
+  script and page names confined to the skill's folder.
+- **[done]** MCP servers: only enabled ones, only while Agent Chat is visible.
+- **[done]** The Hugging Face token is sent only to Hugging Face hosts; secret fields are masked
+  and never shown or logged.
+- **[done]** No remote images from rendered text; no Geocoder; on-device speech recognition only.
 - **[done]** No cleartext HTTP, no WebView metrics or Safe Browsing pings, no cloud backup or
   device-to-device transfer of app data.
 - **[done]** Removed upstream's FCM handler, which let any app make PhoneAgent open an arbitrary
   URL through a `deeplink` intent extra, and the debug logging of every intent extra.
+- **[done]** The app opts out of content capture, autofill and Recents screenshots, and asks
+  keyboards not to learn typed text.
 - **[done]** CI uses first-party GitHub actions pinned to commit SHAs, read-only permissions
   except the publish job, and signing secrets that are decoded to a temp file and deleted. Release
   keys never go to GitHub; the owner signs releases locally.
@@ -46,6 +58,9 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   Residual risk: no extra checksum check beyond that pin.
 
 ### Agent: what the model can do
+- **[done, interim]** In the existing tiles, calendar, contacts, messaging and network-capable
+  tool calls ask for confirmation every time, and an Agent Chat intent runs only while an enabled
+  skill offers it. Phase 4's policy engine replaces this.
 - **[P2]** The model gets a small fixed tool set (read_screen, tap, type_text, scroll, back, home,
   open_app, open_url, note, save_result, finish). No tool can change policy, the allowlist, locks
   or settings of this app.
@@ -72,7 +87,9 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   context.
 - **[P1]** Secure windows (`FLAG_SECURE`) and empty or hidden screens are reported as such and
   the task stops. No workaround.
-- **[P1]** Screen contents are never written to logcat.
+- **[done]** Release and ci builds contain no `Log.v/d/i` calls (app and libraries), and
+  LiteRT-LM's native logging is limited to errors.
+- **[P1]** Screen contents are never written to logcat by the agent's own code, in any build.
 
 ### Browser
 - **[P1]** Web tasks run in Firefox private tabs only. The agent refuses to read a non-private
@@ -80,6 +97,8 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[P5, fallback only]** GeckoView with per-task private sessions, if Firefox can't be driven.
 
 ### Entry points
+- **[done]** Upstream's exported `com.google.ai.edge.gallery://` deep link is gone; app links are
+  accepted only through a non-exported alias.
 - **[P2]** Tasks start only from text the owner types in the app or in the Quick Settings popup.
   Deep links and intents from other apps can't start a task.
 - **[P2]** Android 10+ background-start rules are respected: the first app is launched from the
@@ -97,8 +116,10 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   to open). Confirmations and the allowlist bound the damage; they don't remove the risk.
 - Accessibility services are powerful by design. If the phone is compromised, PhoneAgent's
   service is another capability an attacker could try to misuse.
-- Upstream merges can reintroduce trackers; the build guard and the re-appliable privacy commit
-  exist for that.
+- Upstream merges can reintroduce trackers; the build guard, the APK check and the re-appliable
+  privacy commit exist for that.
+- A skill whose "Allow network" switch is on runs third-party code with network access; each
+  call asks first.
 
 ## Reporting a problem
 

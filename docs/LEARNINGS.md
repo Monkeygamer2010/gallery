@@ -118,8 +118,9 @@ has run) or a local `assembleDebug`. Report each item as pass/fail plus notes.
    2. **Smart Album**: download EmbeddingGemma-2 (485 MB), index the sample or your photos,
       search for something. The optional sample photos come from `dl.google.com` (expected).
    3. **Video Moment Finder**: add a short video, run a search.
-   If any tile crashes, send the crash text (Settings > Developer options > "Bug report", or
-   `adb logcat -b crash`) and we hide that tile in a follow-up.
+   If any tile crashes, send only the crash text (`adb logcat -b crash -d`, or the text of the
+   crash dialog) and we hide that tile in a follow-up. Don't send a full bug report: it includes
+   the whole log, which in Phase 0 builds could hold past prompts.
 9. Agent Chat: the "schedule a reminder" chip and the `schedule-notification` skill are gone.
 10. Optional: after a reboot, Settings > Apps > PhoneAgent > Battery shows no background use.
 
@@ -140,3 +141,139 @@ delay, then dump the compact tree of the foreground app plus a token estimate), 
 tests, the Firefox private-tab checklist (ACTION_VIEW with "open links in a private tab",
 `org.mozilla.fenix.OPEN_PRIVATE_TAB`, UI driving), launching Firefox from the service, and unit
 tests for the tree serializer and id mapping. Then stop for your results.
+
+---
+
+## Phase 0.1: privacy fixes from the Phase 0 audit (2026-10-18)
+
+An independent audit of Phase 0 against the privacy contract found upstream behaviour that sent
+data off the phone, or could, without an obvious owner action. This phase fixes the items the
+owner chose, then a read-only pass over four more areas (tool authorization, other entry points,
+native logging, OS-level capture) and fixes what it confirmed. `docs/NETWORK.md` is rewritten.
+
+### What changed
+
+| Commit | Summary |
+|---|---|
+| Model list refresh | The ci build asked GitHub for `1_0_20-ci.json`; the build-type suffix is now dropped (unit test). |
+| Downloads | No resume at app start: a **Resume download** button instead, which keeps your choice about extra files. Download work needs a network, and work queued by an earlier process is not run by the system scheduler. The Hugging Face token goes only to `https://huggingface.co` (unit test). The login service (which binds Firefox's Custom Tabs) is created only when a login starts; login shows a message because it isn't configured. |
+| Remote images | Markdown images become links (unit test); the image loader refuses `http(s)`. |
+| Photo library | No Geocoder: raw coordinates. |
+| Dictation | Only the on-device recognizer, with "prefer offline"; the mic button is hidden without one. |
+| Skill WebViews | Serve only skill files; per-skill **Allow network** switch, off by default; CSP, `blockNetworkLoads`, no WebRTC, no service-worker network; script and page names checked (unit test); built-in skills validate their URL parameters; camera/mic requests denied; community-skills page hidden. |
+| MCP | Only enabled servers, only while Agent Chat is visible; streams closed on leave and in the background; removing a server deletes its auth header. |
+| Confirmations | Calendar, contacts, email/SMS, maps, network-enabled skills and MCP calls ask **Allow once** every time (unit test). |
+| Secrets | Password fields for skill secrets, MCP header values and the HF token; Settings no longer shows a token prefix. |
+| App links | Upstream's exported `com.google.ai.edge.gallery://` filter removed; links are accepted only through a non-exported alias. |
+| Log stripping | Bytecode transform removes `Log.v/d/i` from the app and all libraries in release and ci builds. |
+| Guard | Rules are constants; disabling a check stops the build; more forbidden groups; file dependencies fail; new `check<Variant>Apk` on every assemble; CI requires both pass reports. EmojiCompat's startup initializer removed. |
+| Gap pass | Intents run only while an enabled skill offers them (unit test); skill secrets keyed by the running skill; LiteRT-LM native logs limited to errors in release/ci; content capture, autofill, keyboard learning and Recents screenshots opted out. |
+| Docs | NETWORK.md rewritten, SECURITY.md and DECISIONS.md updated, this entry. |
+
+### Android concepts in this phase
+
+- **WorkManager and JobScheduler.** WorkManager saves queued work in its own database and hands
+  it to the system's JobScheduler, which can start the app in the background to run it, even
+  after the app was closed. The fork tags download work with an id that is new in every process,
+  so work left over from an earlier run fails immediately instead of downloading.
+- **Exported components.** An activity marked `exported="true"` can be started by any app with an
+  explicit intent, whatever its intent filters say. Filters only decide which implicit intents
+  (for example a tapped link) reach it. That is why removing the deep-link filter was not enough,
+  and why links now go through a non-exported `activity-alias`: when an alias starts the
+  activity, `intent.component` names the alias, which only this app can use.
+- **WebView request hooks.** `shouldInterceptRequest` sees most loads, but not WebSockets, WebRTC
+  or service workers. The sandbox therefore layers a Content-Security-Policy (enforced by the
+  page itself), `blockNetworkLoads`, a document-start script that removes WebRTC, and
+  service-worker settings.
+- **`WebViewAssetLoader`.** It serves app files under a fake `https://appassets.androidplatform.net`
+  origin, so pages get normal web security without `file://`. Whatever folder you mount is
+  readable by every page on that origin, hence mounting only `files/skills`.
+- **AGP bytecode instrumentation.** `AsmClassVisitorFactory` rewrites compiled classes (including
+  libraries) before dexing. Each `Log.d(...)` call becomes "drop the arguments, push 0", which
+  keeps the bytecode valid without R8.
+- **Activity-level privacy switches.** `ContentCaptureManager`, `importantForAutofill`,
+  `setRecentsScreenshotEnabled` and the keyboard flag `IME_FLAG_NO_PERSONALIZED_LEARNING` control
+  what the system, autofill services and keyboards get to see. Compose sets editor flags through
+  `InterceptPlatformTextInput`.
+
+### Measurements
+
+| | Phase 0 | Phase 0.1 |
+|---|---|---|
+| `ci` APK size | 226.4 MB | 226.4 MB |
+| Classes in the ci dex files | 54,500 (approx.) | 54,517 |
+| `Log.v/d/i` call sites in the ci APK | present (app and libraries) | 0 |
+| Native libraries importing socket/DNS functions | 0 | 0 (now checked on every build) |
+| Merged manifest (ci): permissions; services / receivers / providers / activities | 15; 4 / 4 / 2 / 3 | 15; 4 / 4 / 2 / 3, plus 1 non-exported alias |
+| Unit tests | 12 | 20 |
+| `assembleCi` incl. APK check (incremental) | n/a | 4 min 14 s on the cloud VM |
+
+### On-device checklist (Galaxy S25+)
+
+Install the CI build (`PhoneAgent-ci.apk` from the `phoneagent-ci` pre-release). Report each item
+as pass/fail plus notes. Items marked (re-check) repeat Phase 0 items with the corrected
+expectation.
+
+1. **Privacy, startup and idle (re-check):** `docs/NETWORK.md` > Option A, now capturing all apps.
+   Expected: zero PhoneAgent connections in 2 min on the home screen plus 15 min idle, and nothing
+   from Google Play services or Firefox at the moment you open PhoneAgent.
+2. Settings > Model list reads "(1.0.20)". **Refresh model list**: expect "Downloaded 11
+   models..." and one connection to `raw.githubusercontent.com`. Then **Use bundled list**.
+   (re-check: this failed in the Phase 0 ci build.)
+3. Settings > Hugging Face token: shows "Saved (hidden)" after pasting a token; the field is
+   masked and the keyboard shows no suggestions.
+4. **Resume:** start a model download, then force-stop the app mid-way. Reopen: nothing downloads
+   by itself (PCAPdroid quiet), and the model shows **Resume download** with "(paused)". Tap it:
+   the download continues from where it stopped.
+5. With PCAPdroid on, download a model with a token saved: the token-bearing connections go only
+   to Hugging Face hosts (TLS hides headers; just check no Google host is contacted for a
+   Hugging Face model).
+6. A chat reply containing an image (ask: "Reply with exactly: ![cat](https://example.com/cat.png)")
+   shows a link "cat", not an image, and PCAPdroid shows no `example.com` connection.
+7. Smart Album: open a photo with location: coordinates like "48.1351, 11.5820", no place name.
+8. Hold-to-dictate: if the mic button shows, dictation works with airplane mode on. If the phone
+   has no on-device recognizer, the button is hidden and text input works.
+9. **Agent Chat skills:**
+   1. Skill manager: every skill shows **Allow network**, off.
+   2. Ask "What does Wikipedia say about Munich?": the skill fails, the reply says network is off
+      for `query-wikipedia`, and PCAPdroid shows no `wikipedia.org`.
+   3. Turn **Allow network** on for `query-wikipedia`, ask again: an **Allow once** dialog appears
+      first; after allowing, the answer arrives and PCAPdroid shows `en.wikipedia.org`.
+   4. `interactive-map` with network off: no map, and the reply says why. `mood-tracker`: log a
+      mood, open the dashboard (works offline; the chart and font may be missing).
+   5. Turn on the `send-email` skill (off by default) and ask the model to send an email: an
+      **Allow once** dialog shows the parameters; **Don't allow** stops it. Turn the skill off
+      and ask again: the model is told no enabled skill offers it.
+   6. Add skill: there is no "View community skills" option.
+10. **MCP** (only if you use one): disabled servers are never contacted; leaving Agent Chat or
+    pressing Home closes the connection (PCAPdroid shows it ending); every tool call asks.
+11. **Mobile Actions:** "create a contact for Alex 555 0100", "email bob@example.com hello", "show
+    the Eiffel Tower on the map", "add a meeting tomorrow at 10": each asks first; flashlight
+    does not.
+12. **Links from other apps** (needs adb): `adb shell am start -n
+    io.github.monkeygamer2010.phoneagent.dev/com.google.ai.edge.gallery.MainActivity -d
+    "com.google.ai.edge.gallery://llm_chat"` opens PhoneAgent's home screen, never the chat.
+    `adb shell am start -a android.intent.action.VIEW -d "com.google.ai.edge.gallery://llm_chat"`
+    finds no app. A download that finishes while the app is in the background still posts a
+    notification that opens the model.
+13. **OS capture:** open Recents: PhoneAgent shows a blank card, not a screenshot. Typing a
+    prompt does not add new words to the keyboard's suggestions later (best-effort; depends on
+    the keyboard).
+14. **MediaPipe tiles (re-check of Phase 0 item 8):** Scrapbook, Smart Album, Video Moment Finder
+    open and work, with no connections except the model downloads you start. If a tile crashes,
+    send only `adb logcat -b crash -d`.
+15. Tiny Garden: the game loads and plays offline.
+
+### Open questions
+
+None new. Assumptions made in this phase are listed in `docs/DECISIONS.md` under Phase 0.1; the
+ones most worth a look: camera and microphone stay denied for all skill pages (no per-skill
+switch yet), MCP connections also close when the app goes to the background, and Safe Browsing
+stays off for skill pages that you allow onto the network.
+
+### Next step
+
+Phase 1, feasibility spike without a model (unchanged from Phase 0): the AccessibilityService,
+the Screen Inspector, tap/type/scroll tests, the Firefox private-tab checklist and unit tests for
+the tree serializer and id mapping. Waiting for the owner's OK.
+

@@ -160,8 +160,8 @@ it by editing this file.
   the CI build adds `.dev`, so a CI build and a local debug build install side by side. Each one
   needs its own copy of the model (or use model import).
 - Build type `ci` is release-like (not debuggable), so its speed measurements are representative.
-- An interrupted model download still resumes at the next app start (upstream behaviour): it
-  continues a download the owner started. Documented as row 1a in `docs/NETWORK.md`.
+- Interrupted model downloads: superseded in Phase 0.1 (owner decision: no auto-resume; a
+  "Resume download" button instead).
 - "Refresh model list" saves the new list and applies it at the next app start (reloading in place
   could duplicate models in tasks or orphan a loaded engine). "Use bundled list" deletes the
   downloaded copy.
@@ -179,3 +179,51 @@ it by editing this file.
 - Upstream's first-run Google terms-of-service dialog and Gemma terms links are left as is for now
   (open question for Phase 6).
 - New files carry an Apache-2.0 header with "Copyright 2026 The PhoneAgent Authors".
+
+## Phase 0.1 (owner decisions and assumptions)
+
+Owner decisions (from the Phase 0 audit review):
+- Remote images are never loaded: Markdown images show as links (alt text); no tap-to-load yet.
+- No Geocoder: Smart Album shows raw coordinates.
+- AppAuth's Custom Tabs warmup happens only when the Hugging Face login is configured and used.
+- No download auto-resume. A "Resume download" button resumes it, download work needs a network,
+  extra files are resumed only if they were chosen, and the system scheduler cannot resume work
+  queued by an earlier run.
+- Skill WebViews: no network and no app-private storage by default; a per-skill "Allow network"
+  switch, off by default; URL parameters validated; the app's private folder never served. The
+  in-app "View community skills" page is hidden.
+- MCP: only enabled servers, only while Agent Chat is on screen; streams closed on exit; stored
+  auth headers never sent to disabled servers.
+- Hold-to-dictate only with an offline on-device recognizer; never the default recognizer.
+- WebView camera and microphone requests denied by default.
+- Secret fields masked; token-prefix logs removed; debug logging off in release and ci; the
+  upstream deep link not exported.
+- Guard: APK-level check, more forbidden groups (Play Core, AICore SDK), not overridable from
+  build scripts.
+- Until Phase 4's policy engine: calendar, contacts and network-capable tools in the existing
+  tiles ask for confirmation on every call.
+
+Assumptions (change any by editing here):
+- Camera and microphone stay denied for every skill page, with no per-skill switch. The
+  `text-spinner` skill therefore cannot use the camera.
+- "Allow network" is stored per skill and keyed by where its code comes from (built-in folder,
+  import folder or URL). Deleting or renaming a skill resets it. Skills loaded from a URL cannot
+  run while it is off. Safe Browsing stays off for allowed skill pages too (privacy over phishing
+  warnings; Firefox has its own).
+- With "Allow network" on, skill pages may load any `https` URL; plain `http` is refused.
+- MCP connections also close when the app goes to the background and reopen when Agent Chat is
+  visible again.
+- Confirmation scope: Agent Chat intents except reading the date and time, skills with network
+  allowed, and every MCP call; Mobile Actions create contact, send email, show on map and create
+  calendar event (not flashlight or Wi-Fi settings). "Always allow" is removed for now.
+- An Agent Chat intent runs only while an enabled skill's instructions name it.
+- Debug logs are removed by a bytecode transform (`Log.v/d/i`, app and libraries) because the
+  release build does not run R8. Warnings and errors stay. LiteRT-LM's native logging is limited
+  to errors in release and ci and warnings in debug.
+- App links are accepted only through a non-exported alias used by the app's own notifications.
+  AppAuth's redirect activity stays exported (inert until a login is configured).
+- EmojiCompat's startup initializer is removed (beyond the listed scope): it can ask Google Play
+  services' font provider to download emoji fonts at startup. The system emoji font is used.
+- The app opts out of content capture, autofill and Recents screenshots, and asks keyboards not
+  to learn typed text. `FLAG_SECURE` is not set, so you can still take screenshots of the app.
+

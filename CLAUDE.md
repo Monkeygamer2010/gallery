@@ -26,7 +26,8 @@ Full decisions: `docs/DECISIONS.md`. Phase log: `docs/LEARNINGS.md`. Traffic: `d
 export ANDROID_HOME=/opt/android-sdk     # cloud VM; see below if missing
 ./gradlew assembleDebug                  # debug APK
 ./gradlew :app:testDebugUnitTest         # JVM unit tests (pure logic)
-./gradlew :app:privacyGuard              # fails on Firebase/GMS/ML Kit; prints deps + licenses
+./gradlew :app:privacyGuard              # fails on forbidden deps/plugins; prints deps + licenses
+./gradlew :app:checkCiApk                # APK check (dex, native, logs, manifest); runs with assembleCi
 ./gradlew :app:updateThirdPartyLicenses  # regenerate the in-app licenses list after dep changes
 ./gradlew assembleCi                     # ".dev" CI build (signed from env, else debug key)
 ```
