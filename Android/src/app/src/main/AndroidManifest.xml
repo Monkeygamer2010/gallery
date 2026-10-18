@@ -82,8 +82,16 @@
 
             <!-- PhoneAgent fork: upstream's com.google.ai.edge.gallery:// deep link filter is
                  removed, so other apps and web pages cannot open a task or pre-fill a prompt.
-                 The app's own notifications open these links with explicit intents. -->
+                 The app's own notifications open these links through InternalLinks below. -->
         </activity>
+
+        <!-- PhoneAgent fork: the only way in for com.google.ai.edge.gallery:// links. Not exported,
+             so only this app can use it; links sent straight to MainActivity are ignored
+             (phoneagent/os/InternalLinks.kt). -->
+        <activity-alias
+            android:name="com.google.ai.edge.gallery.phoneagent.InternalLinks"
+            android:targetActivity="com.google.ai.edge.gallery.MainActivity"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

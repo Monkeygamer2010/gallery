@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.ui.navigation
 
+import com.google.ai.edge.gallery.phoneagent.os.isInternalLink
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -442,7 +443,9 @@ fun GalleryNavHost(
 
   // Handle incoming intents for deep links
   val intent = androidx.activity.compose.LocalActivity.current?.intent
-  val data = intent?.data
+  // PhoneAgent fork: only links sent through the non-exported alias count; other apps can start
+  // the exported main activity with any data.
+  val data = intent?.data?.takeIf { intent.isInternalLink }
   // Wait until the model manager has been initialized and the tasks are available.
   if (data != null && modelManagerUiState.tasks.isNotEmpty()) {
     intent.data = null

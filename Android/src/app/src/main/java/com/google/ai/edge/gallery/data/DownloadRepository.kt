@@ -42,7 +42,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import com.google.ai.edge.gallery.MainActivity
+import com.google.ai.edge.gallery.phoneagent.os.internalLink
 import com.google.ai.edge.gallery.AppLifecycleProvider
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
@@ -477,7 +477,7 @@ class DefaultDownloadRepository(
       intent =
         Intent(Intent.ACTION_VIEW, "com.google.ai.edge.gallery://global_model_manager".toUri())
           .apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
-          .setClass(context, MainActivity::class.java) // PhoneAgent fork: deep link is internal
+          .let { internalLink(context, it) } // PhoneAgent fork: deep links are internal only
     } else {
 
       // Otherwise, create the deep link as before.
@@ -487,7 +487,7 @@ class DefaultDownloadRepository(
             "com.google.ai.edge.gallery://model/$taskId/${modelName}".toUri(),
           )
           .apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
-          .setClass(context, MainActivity::class.java) // PhoneAgent fork: deep link is internal
+          .let { internalLink(context, it) } // PhoneAgent fork: deep links are internal only
     }
 
     // Create a PendingIntent
