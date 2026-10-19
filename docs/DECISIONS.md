@@ -203,6 +203,10 @@ Owner decisions (from the Phase 0 audit review):
 - Until Phase 4's policy engine: calendar, contacts and network-capable tools in the existing
   tiles ask for confirmation on every call.
 
+Confirmed by the owner after Phase 0.1: camera and microphone stay denied for skill pages; MCP
+connections close in the background; Safe Browsing stays off; "Always allow" stays removed until
+Phase 4.
+
 Assumptions (change any by editing here):
 - Camera and microphone stay denied for every skill page, with no per-skill switch. The
   `text-spinner` skill therefore cannot use the camera.
@@ -221,7 +225,6 @@ Assumptions (change any by editing here):
   release build does not run R8. Warnings and errors stay. LiteRT-LM's native logging is limited
   to errors in release and ci and warnings in debug.
 - App links are accepted only through a non-exported alias used by the app's own notifications.
-  AppAuth's redirect activity stays exported (inert until a login is configured).
 - EmojiCompat's startup initializer is removed (beyond the listed scope): it can ask Google Play
   services' font provider to download emoji fonts at startup. The system emoji font is used.
 - The app opts out of content capture, autofill and Recents screenshots, and asks keyboards not

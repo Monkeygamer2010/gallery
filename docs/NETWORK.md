@@ -132,9 +132,8 @@ loosen them, and the build stops if a build script disables either check.
 - `check<Variant>Apk` runs with every `assemble<Variant>` and inspects the built APK: no forbidden
   classes in any dex file, telemetry classes only from `:telemetry-stub`, no native socket or DNS
   imports, no `Log.v/d/i` calls left in release and ci builds, and merged-manifest rules (approved
-  permissions only; no component other apps can start except the launcher and AppAuth's inert
-  redirect activity, apart from ones only the system or adb can reach; cleartext and backups off;
-  WebView metrics and Safe Browsing off; no EmojiCompat initializer).
+  permissions only; no component other apps can start beyond an approved list; cleartext and
+  backups off; WebView metrics and Safe Browsing off; no EmojiCompat initializer).
 - Both write a report under `app/build/reports/phoneagent/` only when they pass; CI fails if a
   report is missing or did not pass.
 
