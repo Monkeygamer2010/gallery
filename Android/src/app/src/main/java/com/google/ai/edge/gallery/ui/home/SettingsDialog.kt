@@ -80,6 +80,7 @@ import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.phoneagent.licenses.LicensesDialog
 import com.google.ai.edge.gallery.phoneagent.modellist.ModelListSettingsSection
+import com.google.ai.edge.gallery.phoneagent.spike.SpikeSettingsSection
 import com.google.ai.edge.gallery.ui.common.ClickableLink
 import com.google.ai.edge.gallery.ui.common.tos.AppTosDialog
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
@@ -310,6 +311,9 @@ fun SettingsDialog(
 
           // PhoneAgent fork: the model list is fetched only from here (docs/NETWORK.md).
           ModelListSettingsSection()
+
+          // PhoneAgent fork: Phase 1 spike tools.
+          SpikeSettingsSection()
 
           // Third party licenses.
           Column(modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {

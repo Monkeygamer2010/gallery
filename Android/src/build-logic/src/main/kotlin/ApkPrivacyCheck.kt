@@ -118,7 +118,12 @@ internal object ApkRules {
   val APPROVED_EXPORTED_DEBUG = setOf("androidx.compose.ui.tooling.PreviewActivity")
 
   /** Exported components guarded by these permissions can only be reached by the system or adb. */
-  val SYSTEM_PERMISSIONS = setOf("android.permission.BIND_JOB_SERVICE", "android.permission.DUMP")
+  val SYSTEM_PERMISSIONS =
+    setOf(
+      "android.permission.BIND_JOB_SERVICE",
+      "android.permission.DUMP",
+      "android.permission.BIND_ACCESSIBILITY_SERVICE",
+    )
 
   /** androidx.startup initializers that must not run at startup. */
   val FORBIDDEN_INITIALIZERS = setOf("androidx.emoji2.text.EmojiCompatInitializer")
