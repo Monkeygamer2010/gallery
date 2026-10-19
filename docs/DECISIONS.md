@@ -230,3 +230,27 @@ Assumptions (change any by editing here):
 - The app opts out of content capture, autofill and Recents screenshots, and asks keyboards not
   to learn typed text. `FLAG_SECURE` is not set, so you can still take screenshots of the app.
 
+
+## Phase 1 (assumptions; change any by editing here)
+
+- The spike tools live behind Settings > **Open spike tools** (a separate, non-exported screen),
+  not a home-screen tile; the PhoneAgent task arrives in Phase 2.
+- Every test runs in the app in front after a 5 s countdown. PhoneAgent moves itself to the
+  background when you start a test and, by default, the service brings it back with the result.
+- Results (compact read, details, stats) are kept in memory only, at most 5, and never saved,
+  logged or uploaded. **Copy** puts them on the clipboard marked as sensitive. Saved instance
+  state is not used for them.
+- The service never acts on PhoneAgent itself or in Settings, and it reads PhoneAgent's own
+  screen as empty.
+- Tap: node click on the element or its nearest clickable parent (up to 5 levels), then a tap
+  gesture. Type: set-text, then paste (the clipboard is cleared afterwards), then optional IME
+  Enter. Scroll: the largest scrollable node's scroll action, then a swipe.
+- Token counts are estimates (about 4 characters per token for Latin text, 1 per character for
+  other scripts) until Phase 2 can use the model's tokenizer.
+- Private-tab detection is a heuristic for the spike: browser UI (outside the web view) whose
+  view id or text mentions "private". Your results decide what Phase 2 relies on.
+- Test pages are public: Wikipedia, a DuckDuckGo search and `httpbin.org/forms/post` as the
+  simple form page.
+- Package visibility is limited to the Firefox builds and "who handles https links".
+- The service listens only to window-change events and keeps nothing from them. No
+  `SYSTEM_ALERT_WINDOW`, no overlay yet (the Stop chip is Phase 2).

@@ -277,3 +277,150 @@ Phase 1, feasibility spike without a model (unchanged from Phase 0): the Accessi
 the Screen Inspector, tap/type/scroll tests, the Firefox private-tab checklist and unit tests for
 the tree serializer and id mapping. Waiting for the owner's OK.
 
+
+---
+
+## Phase 1: feasibility spike, no model (2026-10-19)
+
+Goal: find out whether PhoneAgent can read and drive Firefox (and launch apps) through an
+AccessibilityService well enough for Phase 2, before any model is involved. Owner's answers to
+the Phase 0.1 questions are recorded in `docs/DECISIONS.md`.
+
+### What changed
+
+| Commit | Summary |
+|---|---|
+| Screen serializer | Plain-Kotlin copy of the accessibility tree and the reader that turns it into `[id] role "label" state` lines: visible nodes only, de-duplicated, password values never shown, about 800 estimated tokens at most, header with app, URL, private mode, keyboard and scroll. Ids map back to nodes; a tap or type checks that the id still means the same element. 17 unit tests. |
+| Firefox reader | Toolbar address (by view id, else URL-like toolbar text), private-mode evidence from the browser's own UI only (never page content), `https://`-only URLs. 6 unit tests. |
+| Accessibility service | Reads the app in front and taps (node click, then gesture), types (set-text, then paste, then Enter), scrolls (node action, then swipe), presses Back, opens Firefox (ACTION_VIEW or `OPEN_PRIVATE_TAB`) and launches it from the background or via Home + icon. Acts only when you start a test; never on PhoneAgent or Settings. |
+| Spike screen | Settings > **Open spike tools**: setup status, **Inspect in 5 s**, act on an id, Firefox tests with public test pages, results with **Copy** (memory only, never saved). |
+| Guard | The APK check allows the accessibility service (only the system can bind it). |
+| Docs | This entry, DECISIONS.md, SECURITY.md, NETWORK.md. |
+
+### Android concepts in this phase
+
+- **AccessibilityService.** The system binds it after you switch it on in Settings; it then gets
+  window content as a tree of `AccessibilityNodeInfo` (text, description, role, state, bounds)
+  and can call actions on nodes (`ACTION_CLICK`, `ACTION_SET_TEXT`, scroll) or inject gestures.
+  What it may do is declared in an XML file: we ask for window content, view ids, the list of
+  windows and gestures; not screenshots, not key events, and we don't claim to be an
+  accessibility tool.
+- **Restricted settings (Android 13+).** For apps installed from a file rather than a store,
+  Android blocks the accessibility switch until you allow it in the app's info page. It exists
+  because malware uses accessibility to take over phones.
+- **Background activity starts.** Since Android 10 an app in the background can't open screens.
+  An app whose accessibility service is bound by the system is exempt, which is how the service
+  opens Firefox and brings PhoneAgent back while another app is in front.
+- **Package visibility (Android 11+).** Apps only see the other apps they declare in `<queries>`.
+  PhoneAgent declares the Firefox packages and "who opens https links", nothing more.
+- **Node actions vs. gestures.** A node click works regardless of where the element is on screen
+  and doesn't move a visible finger; a gesture needs coordinates and fails if something covers
+  the element. That's why gestures are only the fallback.
+
+### Measurements (cloud VM)
+
+| | Phase 0.1 | Phase 1 |
+|---|---|---|
+| `ci` APK size | 226.4 MB | 226.6 MB |
+| Unit tests | 20 | 43 (serializer 12, id mapping 5, Firefox reader 6) |
+| New permissions | | none (the service is bound with `BIND_ACCESSIBILITY_SERVICE`) |
+
+On-device numbers (node count, read time, token estimate per page) come from your results.
+
+### On-device checklist (Galaxy S25+, One UI 8.5)
+
+Install the CI build (`PhoneAgent-ci.apk` from the `phoneagent-ci` pre-release; it installs as
+a separate app next to older debug builds). Only public test pages are used, all in a Firefox
+**private** tab:
+
+- Wikipedia: `https://en.wikipedia.org/wiki/Munich`
+- DuckDuckGo search: `https://duckduckgo.com/?q=munich`
+- Simple public form: `https://httpbin.org/forms/post`
+
+For each test, tap **Copy** on its result card and paste the text into your reply (it only
+contains these public pages). Report pass/fail and anything odd.
+
+**A. One-time setup**
+1. Default browser: Settings > Apps > Choose default apps > Browser app > **Firefox**.
+2. Firefox: ⋮ > Settings > Private browsing > turn on **Open links in a private tab**. Leave
+   "Allow screenshots in private browsing" as it is and note its state.
+3. uBlock Origin in private tabs: Firefox ⋮ > Extensions > uBlock Origin > turn on **Run in
+   private browsing** (wording may be "Allow in private browsing").
+4. Turn on the service, part 1: Settings > Accessibility > **Installed apps** > **PhoneAgent** >
+   turn the switch on. One UI shows a "Restricted setting" dialog: tap **OK**.
+5. Allow restricted settings: Settings > Apps > **PhoneAgent** (the one with package ending
+   `.dev`) > ⋮ (top right) > **Allow restricted settings** > confirm with your PIN or
+   fingerprint.
+6. Turn on the service, part 2: Settings > Accessibility > Installed apps > PhoneAgent > switch
+   on > **Allow**. If Android says Advanced Protection blocks it, stop and tell me (we don't
+   work around it).
+7. Battery: Settings > Apps > PhoneAgent > Battery > **Unrestricted**. Also, if listed:
+   Settings > Battery > Background usage limits > Never auto sleeping apps > + > PhoneAgent.
+8. Open PhoneAgent > Settings (gear) > **Open spike tools**. Setup must show ✓ for the service
+   (connected), battery unrestricted, Firefox installed and Firefox as default browser.
+   Report the Firefox version shown.
+
+**B. Private tab and address (pass: private tab opens and is reliably detectable, URL readable)**
+1. Pick **Wikipedia**, tap **Open private (OPEN_PRIVATE_TAB)**. Expect: Firefox opens the page in
+   a private tab; the result shows `Address: en.wikipedia.org/...` and `Private tab: yes` with
+   evidence. Report what Firefox actually did (private tab? normal tab? home screen only?).
+2. Tap **Open (ACTION_VIEW)** with the same page. With "Open links in a private tab" on, expect a
+   private tab again. Then turn that Firefox setting off, repeat, and expect `Private tab: no
+   evidence`. Turn it back on afterwards.
+3. Reliability: in Firefox switch by hand between a normal tab and a private tab, three times
+   each, and use **Inspect in 5 s** each time. Private-tab reads must show evidence; normal-tab
+   reads must show none. Copy one of each with **Copy with details**.
+
+**C. Reading (pass: page text and links visible; typical viewport about 800 tokens or less)**
+1. Wikipedia page in the private tab: **Inspect in 5 s**. Expect the article heading, paragraph
+   text and links (`link "..."`), and in Stats the tokens for the whole viewport. Repeat after
+   scrolling once by hand.
+2. Do the same on the DuckDuckGo results and on the form page. Report the "whole viewport"
+   token number and the read time for each.
+
+**D. Acting (pass: link tap, typing and scrolling work)**
+1. Link tap: on Wikipedia, take a link id from the last inspection, type it into **Element id**
+   and tap **Tap**. Expect "Tapped with a node click" and an After read with the new address.
+2. Typing: on DuckDuckGo, inspect, find the search `input`, enter its id and the text `Firefox
+   private browsing`, keep **Press Enter** on, tap **Type**. Expect the results page for the new
+   search (address contains `q=Firefox`).
+3. Scrolling: on the results page, **Scroll down**, then **Scroll up**. Expect "Scrolled with a
+   node action" (or the swipe fallback) and different elements in the After read.
+4. Form: on the form page, type a name into "Customer name", tap a pizza size radio button and
+   a topping checkbox. Don't submit. The After reads show the value and `checked`.
+5. Password redaction: open `https://en.wikipedia.org/w/index.php?title=Special:UserLogin`, type
+   a few made-up characters into the password field by hand (not a real password), then
+   **Inspect**. The password field shows as `input "Password" password` without the
+   characters, also in **Show details**.
+6. Stale id: inspect, then change the page by hand (open another link) and tap **Tap** with an
+   old id. Expect "The screen changed ... Nothing done."
+7. **Back**: expect Firefox to go back one page.
+
+**E. Launches (pass: launches work)**
+1. Close Firefox (swipe it away in Recents). **Launch from service**: Firefox opens while
+   PhoneAgent is in the background, then PhoneAgent comes back with an After read.
+2. Put the Firefox icon on your first home screen page. **Launch via Home + icon**: the phone
+   goes Home, the Firefox icon is tapped, Firefox opens.
+3. With "Come back here after each test" on, every test should end back in the spike screen.
+
+**F. uBlock Origin in the private tab (pass: uBO active there)**
+1. In the private tab on the DuckDuckGo results, open Firefox ⋮ > Extensions > uBlock Origin.
+   Expect uBO's panel with the big power button on and a blocked-request count. Report the
+   count.
+
+**G. Privacy checks**
+1. Repeat the PCAPdroid startup/idle check from `docs/NETWORK.md` (pending from Phase 0.1).
+   While doing the tests above, PhoneAgent itself should make no connections; all page traffic
+   belongs to Firefox.
+2. The results disappear when you tap **Clear** or force-stop PhoneAgent; nothing is in the
+   app's storage (Settings > Apps > PhoneAgent > Storage stays the same after a run).
+
+### Open questions
+
+None new. Phase 1 assumptions are in `docs/DECISIONS.md` under Phase 1.
+
+### Next step
+
+Wait for your Phase 1 results. If the spike passes: Phase 2 (task, E4B, core tools, loop,
+foreground service, Quick Settings tile, read-only web tasks). If Firefox can't be driven
+reliably (for example private tabs can't be opened or detected), we discuss Phase 5's fallback.

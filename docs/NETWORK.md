@@ -21,7 +21,7 @@ native libraries in the built APK.
 | 5 | Agent Chat skills (JS skills in a WebView) | `SKILL.md` from a skill URL you add; for a skill whose **Allow network** switch you turned on: whatever its pages load (for example `query-wikipedia` calls `<lang>.wikipedia.org`, `interactive-map` shows Google Maps) | Adding a skill from a URL; running a skill with network allowed. Every such call asks first | Yes. **Allow network** is off for every skill by default |
 | 6 | Agent Chat MCP servers | the MCP server URLs you add | Adding a server; while Agent Chat is on screen, enabled servers only. Connections close when you leave Agent Chat or the app goes to the background. Every tool call asks first | Yes. None configured by default |
 | 7 | Links in the UI (`ClickableLink`, skill homepages, Tiny Garden credits) | any | Tapping a link opens it in your browser; the browser makes the connection (see "Traffic made by other apps") | Yes |
-| 8 | Phone Agent browser tasks (Phase 2+) | sites the task visits | Firefox's own traffic while a task you started runs | Yes |
+| 8 | Phone Agent spike (Phase 1) and tasks (Phase 2+) | the `https://` page you open from the spike screen; later, sites a task visits | Firefox's own traffic after you tap **Open** in the spike tools or start a task. The accessibility service itself makes no connections | Yes |
 
 Nothing else from the app's own process. In particular:
 

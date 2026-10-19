@@ -75,7 +75,9 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[P4]** Default-deny per-app allowlist. Category locks for Money & credentials (asks every
   time), Email & messaging, App stores & installers, System Settings, each refused until the
   owner flips an "I understand" switch.
-- **[P2]** Never operates PhoneAgent itself or Settings > Accessibility.
+- **[done, spike]** The service acts only when the owner starts a test, never on PhoneAgent
+  itself or in Settings, and does not claim `isAccessibilityTool`.
+- **[P2]** The same rules for tasks.
 - **[P2]** `open_url` accepts `https://` only, caps the URL length, and logs every URL in the run
   log.
 
@@ -85,14 +87,19 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   controls above are what bound it.
 - **[P2]** Password fields are redacted. Clipboard contents and secrets never enter the model's
   context.
-- **[P1]** Secure windows (`FLAG_SECURE`) and empty or hidden screens are reported as such and
-  the task stops. No workaround.
+- **[done, spike]** Empty or hidden screens are reported as such ("stop here"). No workaround.
+- **[P2]** A task stops on such a screen.
 - **[done]** Release and ci builds contain no `Log.v/d/i` calls (app and libraries), and
   LiteRT-LM's native logging is limited to errors.
-- **[P1]** Screen contents are never written to logcat by the agent's own code, in any build.
+- **[done]** The accessibility service and spike screen never log, save or upload screen
+  contents; spike results stay in memory and are copied only on request (clipboard marked
+  sensitive). Password values are never shown, even in the developer view.
 
 ### Browser
-- **[P1]** Web tasks run in Firefox private tabs only. The agent refuses to read a non-private
+- **[done, spike]** Firefox pages are opened with `https://` addresses only; private-tab
+  detection uses the browser's own UI, never page content. The owner's Phase 1 results decide how
+  reliable it is.
+- **[P2]** Web tasks run in Firefox private tabs only. The agent refuses to read a non-private
   tab, never reads history or saved logins, and never changes browser settings or extensions.
 - **[P5, fallback only]** GeckoView with per-task private sessions, if Firefox can't be driven.
 
