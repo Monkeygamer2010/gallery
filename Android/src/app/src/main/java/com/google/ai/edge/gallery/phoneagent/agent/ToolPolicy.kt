@@ -28,6 +28,11 @@ data class ScreenFacts(
   val isFirefox: Boolean = FirefoxReader.isFirefox(packageName),
   /** For Firefox: whether its own UI shows private mode. Null for other apps. */
   val privateTab: Boolean? = null,
+  /**
+   * For Firefox: neither a web page nor Firefox's home page is on screen, i.e. its own settings,
+   * menus or add-on pages, which the agent never reads or operates.
+   */
+  val browserOwnScreen: Boolean = false,
 )
 
 sealed interface Decision {
@@ -78,6 +83,9 @@ object ToolPolicy {
     if (facts.privateTab != true) {
       return Decision.Refuse("This Firefox tab is not private, so it is not read. Use open_url to open a private tab.")
     }
+    if (facts.browserOwnScreen) {
+      return Decision.Refuse("Firefox's own menus and settings are off limits. Use back, or open_url to open a page.")
+    }
     return Decision.Allow
   }
 
@@ -99,7 +107,10 @@ object ToolPolicy {
       is AgentAction.OpenUrl ->
         if (safeUrl(action.url) != null) Decision.Allow
         else Decision.Refuse("Only public https:// addresses can be opened, at most ${FirefoxReader.MAX_URL_LENGTH} characters.")
-      AgentAction.Back,
+      // Back may also leave Firefox's own menus, but only in private mode.
+      AgentAction.Back ->
+        if (facts.isFirefox && facts.privateTab == true) Decision.Allow
+        else onReadableScreen(facts, ownPackage) ?: Decision.Allow
       is AgentAction.Scroll -> onReadableScreen(facts, ownPackage) ?: Decision.Allow
       is AgentAction.Tap ->
         onReadableScreen(facts, ownPackage)

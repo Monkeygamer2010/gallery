@@ -28,6 +28,10 @@ data class BrowserState(
   val urlSource: String?,
   /** Browser UI elements (never page content) that mention private browsing. */
   val privateEvidence: List<String>,
+  /** A web page is on screen (Firefox's web content view). */
+  val webContent: Boolean = false,
+  /** Firefox's home page is on screen (a view id mentions "homepage"). */
+  val homepage: Boolean = false,
 ) {
   val isPrivate: Boolean
     get() = privateEvidence.isNotEmpty()
@@ -103,12 +107,18 @@ object FirefoxReader {
     val evidence = mutableListOf<String>()
     var fallbackUrl: String? = null
     var fallbackSource: String? = null
+    var webContent = false
+    var homepage = false
 
     fun visit(node: UiNode) {
       if (!node.visible || node.bounds.isEmpty || !node.bounds.intersects(screen)) return
       // Page content: never used as evidence.
-      if (node.className == "android.webkit.WebView") return
+      if (node.className == "android.webkit.WebView") {
+        webContent = true
+        return
+      }
       val idName = node.viewId?.substringAfterLast('/')
+      if (idName?.contains("homepage", ignoreCase = true) == true) homepage = true
       val text = node.text?.trim()?.takeIf { it.isNotEmpty() }
       val desc = node.contentDescription?.trim()?.takeIf { it.isNotEmpty() }
       if (url == null && idName != null && idName in URL_VIEW_IDS && text != null) {
@@ -136,6 +146,6 @@ object FirefoxReader {
       url = fallbackUrl
       urlSource = fallbackSource
     }
-    return BrowserState(url, urlSource, evidence.distinct().take(10))
+    return BrowserState(url, urlSource, evidence.distinct().take(10), webContent, homepage)
   }
 }

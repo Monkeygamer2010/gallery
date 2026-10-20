@@ -14,9 +14,9 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 -->
-<!-- PhoneAgent's accessibility service (Phase 1 spike). It reads window content and performs
-     gestures only when the owner starts a test in the app. No screenshots, no key filtering,
-     and not declared as an accessibility tool. -->
+<!-- PhoneAgent's accessibility service. It reads window content and performs gestures only
+     when the owner starts a spike test or a Phone Agent task in the app. No screenshots, no key
+     filtering, and not declared as an accessibility tool. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"

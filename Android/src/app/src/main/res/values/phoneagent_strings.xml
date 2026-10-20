@@ -19,5 +19,7 @@
   <string name="phoneagent_resume_download" translatable="false">Resume download</string>
   <string name="phoneagent_a11y_label" translatable="false">PhoneAgent</string>
   <string name="phoneagent_a11y_summary" translatable="false">Reads and operates other apps only when you start a test or task in PhoneAgent.</string>
-  <string name="phoneagent_a11y_description" translatable="false">PhoneAgent reads the screen and taps, types and scrolls only when you start a test (or, from Phase 2, a task) in the PhoneAgent app. Screen contents stay on the phone: they are not saved, logged or sent anywhere. It never operates PhoneAgent itself or Settings.</string>
+  <string name="phoneagent_a11y_description" translatable="false">PhoneAgent reads the screen and taps, types and scrolls only when you start a test or a Phone Agent task in the PhoneAgent app. Tasks read and operate Firefox private tabs only. Screen contents stay on the phone: they are not saved, logged or sent anywhere. It never operates PhoneAgent itself or Settings.</string>
+  <string name="phoneagent_task_label" translatable="false">Phone Agent</string>
+  <string name="phoneagent_tile_label" translatable="false">Phone Agent</string>
 </resources>

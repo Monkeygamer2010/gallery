@@ -129,4 +129,22 @@ class FirefoxReaderTest {
     assertFalse(FirefoxReader.isFirefox("com.android.chrome"))
     assertFalse(FirefoxReader.isFirefox(null))
   }
+
+  @Test
+  fun tellsWebPagesAndTheHomePageFromFirefoxsOwnScreens() {
+    val page = FirefoxReader.read(firefox(toolbar = emptyList(), page = listOf(n(2, text = "Munich"))), SCREEN)
+    assertTrue(page.webContent)
+    assertFalse(page.homepage)
+    val home =
+      FirefoxReader.read(
+        n(0, children = listOf(n(1, desc = "Private browsing", viewId = "org.mozilla.firefox:id/private.browsing.homepage.button"))),
+        SCREEN,
+      )
+    assertTrue(home.homepage)
+    assertFalse(home.webContent)
+    val settings = FirefoxReader.read(n(0, children = listOf(n(1, text = "Private browsing"), n(2, text = "Search"))), SCREEN)
+    assertFalse(settings.webContent)
+    assertFalse(settings.homepage)
+    assertTrue(settings.isPrivate) // the word alone; the policy still refuses this screen
+  }
 }

@@ -28,6 +28,8 @@
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- PhoneAgent fork, Phase 2: the foreground service that keeps a Phone Agent run going. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -108,8 +110,8 @@
             android:targetActivity="com.google.ai.edge.gallery.MainActivity"
             android:exported="false" />
 
-        <!-- PhoneAgent fork, Phase 1 spike: the accessibility service (only the system can bind
-             it) and the spike screen (not exported, opened from Settings). -->
+        <!-- PhoneAgent fork: the accessibility service (only the system can bind it) and the
+             Phase 1 spike screen (not exported, opened from Settings). -->
         <service
             android:name="com.google.ai.edge.gallery.phoneagent.a11y.PhoneAgentAccessibilityService"
             android:exported="true"
@@ -127,6 +129,35 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- PhoneAgent fork, Phase 2: the run's foreground service (not exported), the Quick
+             Settings tile (only the system can bind it) and its popup (not exported). -->
+        <service
+            android:name="com.google.ai.edge.gallery.phoneagent.agent.AgentRunService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device agent run: a model the owner started operates apps through this app's accessibility service until the task ends or the owner presses Stop." />
+        </service>
+        <service
+            android:name="com.google.ai.edge.gallery.phoneagent.tile.PhoneAgentTileService"
+            android:exported="true"
+            android:icon="@drawable/agent"
+            android:label="@string/phoneagent_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+        <activity
+            android:name="com.google.ai.edge.gallery.phoneagent.tile.TaskPopupActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.PhoneAgent.Popup"
+            android:windowSoftInputMode="adjustResize|stateVisible" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -33,7 +33,12 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import android.view.accessibility.AccessibilityWindowInfo
+import com.google.ai.edge.gallery.phoneagent.agent.AgentRunner
+import com.google.ai.edge.gallery.phoneagent.agent.Decision
+import com.google.ai.edge.gallery.phoneagent.agent.ScreenFacts
+import com.google.ai.edge.gallery.phoneagent.agent.ToolPolicy
 import com.google.ai.edge.gallery.phoneagent.browser.BrowserState
+import com.google.ai.edge.gallery.phoneagent.browser.FirefoxLaunch
 import com.google.ai.edge.gallery.phoneagent.browser.FirefoxReader
 import com.google.ai.edge.gallery.phoneagent.screen.Bounds
 import com.google.ai.edge.gallery.phoneagent.screen.Element
@@ -62,20 +67,27 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 /**
- * PhoneAgent's AccessibilityService (Phase 1 spike: no model).
+ * PhoneAgent's AccessibilityService.
  *
  * It does nothing on its own: it reads the screen and acts only when the owner starts a test in
- * the spike screen. Screen contents stay in memory ([SpikeSession]) and are never logged, saved or
- * sent anywhere. Actions use node actions first, then text paste, and gestures only as a last
- * resort. It never acts on PhoneAgent itself or in Settings.
+ * the spike screen or a Phone Agent task ([AgentRunner], which checks every action with
+ * [ToolPolicy] first). Screen contents stay in memory and are never logged, saved or sent
+ * anywhere. Actions use node actions first, then text paste, and gestures only as a last resort.
+ * It never acts on PhoneAgent itself or in Settings.
  */
 class PhoneAgentAccessibilityService : AccessibilityService() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var job: Job? = null
+  // Lazy: a service has no context until after construction.
+  private val overlay by lazy { RunOverlay(this, onStop = { AgentRunner.stop() }) }
 
   override fun onServiceConnected() {
     super.onServiceConnected()
     instanceFlow.value = this
+    // The Stop chip and step counter follow the agent run.
+    scope.launch {
+      AgentRunner.state.collect { state -> if (state.active) overlay.show(state) else overlay.hide() }
+    }
   }
 
   // Events are not needed for the spike; nothing from them is kept.
@@ -96,11 +108,17 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
   private fun stop() {
     if (instanceFlow.value === this) instanceFlow.value = null
     scope.cancel()
+    overlay.hide()
     SpikeSession.setStatus(null)
+    if (AgentRunner.state.value.active) AgentRunner.stop("Stopped: the accessibility service was turned off.")
   }
 
   /** Runs [command] in the app in front after [COMMAND_DELAY_MS], then optionally returns to the spike screen. */
   fun run(command: SpikeCommand, returnToApp: Boolean) {
+    if (AgentRunner.state.value.active) {
+      SpikeSession.setStatus("A Phone Agent task is running. Stop it first.")
+      return
+    }
     job?.cancel()
     job =
       scope.launch {
@@ -203,13 +221,14 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
 
   // ---- Reading ----
 
-  private class Snapshot(
+  internal class Snapshot(
     val packageName: String?,
     val screen: Bounds,
     val nodes: List<AccessibilityNodeInfo>,
     val root: com.google.ai.edge.gallery.phoneagent.screen.UiNode?,
     val read: ScreenRead,
-    val summary: ReadSummary,
+    /** The spike's report; null for agent reads. */
+    val summary: ReadSummary?,
   ) {
     fun outcome(): String =
       "Read ${read.elements.size} of ${read.totalElements} elements, about ${read.estimatedTokens} tokens"
@@ -306,6 +325,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     val node = shot.nodes.getOrNull(element.nodeKey) ?: return "Failed: element not found"
     node.refresh()
     val input = if (node.isEditable) node else findEditable(node) ?: return "Failed: [${element.id}] is not an input"
+    if (input.isPassword) return "Refused: typing into password fields is not allowed"
     input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
     val args =
       Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
@@ -398,7 +418,9 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     return if (gesture(path, 350)) "Scrolled with a swipe gesture (fallback: $how)" else "Failed: $how, and the swipe failed"
   }
 
-  private suspend fun gesture(path: Path, durationMs: Long): Boolean =
+  private suspend fun gesture(path: Path, durationMs: Long): Boolean = overlay.passThrough { dispatch(path, durationMs) }
+
+  private suspend fun dispatch(path: Path, durationMs: Long): Boolean =
     suspendCancellableCoroutine { cont ->
       val description =
         GestureDescription.Builder()
@@ -478,6 +500,105 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
       )
     }
   }
+
+  // ---- Phone Agent ----
+
+  /**
+   * Looks at the app in front for the agent loop. Apps other than Firefox are not converted at all
+   * (only their package and name are known); a Firefox tab is serialized only when Firefox's own
+   * UI shows private mode ([ToolPolicy.readDecision]).
+   */
+  suspend fun observeForAgent(): AgentObservation =
+    withContext(Dispatchers.Default) {
+      val start = SystemClock.elapsedRealtime()
+      val allWindows = runCatching { windows }.getOrDefault(emptyList())
+      val keyboardOpen = allWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+      val appWindows = allWindows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+      val window =
+        appWindows.firstOrNull { it.isActive } ?: appWindows.firstOrNull { it.isFocused } ?: appWindows.firstOrNull()
+      val rootNode = window?.root ?: rootInActiveWindow
+      val pkg = rootNode?.packageName?.toString()
+      val label = pkg?.let { appLabel(it) }
+      fun refused(facts: ScreenFacts, reason: String) =
+        AgentObservation(facts, null, reason, null, SystemClock.elapsedRealtime() - start, null)
+      if (rootNode == null || !FirefoxReader.isFirefox(pkg)) {
+        val facts = ScreenFacts(pkg, label)
+        val reason = (ToolPolicy.readDecision(facts, packageName) as? Decision.Refuse)?.reason ?: "Not read."
+        return@withContext refused(facts, reason)
+      }
+      val rect = Rect()
+      window?.getBoundsInScreen(rect)
+      val screen =
+        if (rect.isEmpty) Bounds(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+        else Bounds(rect.left, rect.top, rect.right, rect.bottom)
+      val tree = NodeConverter.convert(rootNode)
+      val browser = FirefoxReader.read(tree.root, screen)
+      val facts =
+        ScreenFacts(pkg, label, privateTab = browser.isPrivate, browserOwnScreen = !browser.webContent && !browser.homepage)
+      val decision = ToolPolicy.readDecision(facts, packageName)
+      if (decision is Decision.Refuse) return@withContext refused(facts, decision.reason)
+      val context = ScreenContext(label, pkg, browser.url, privateTab = true, keyboardOpen = keyboardOpen)
+      val read = ScreenSerializer.read(tree.root, screen, context)
+      AgentObservation(
+        facts = facts,
+        read = read,
+        refusal = null,
+        url = browser.url,
+        readMs = SystemClock.elapsedRealtime() - start,
+        snapshot = Snapshot(pkg, screen, tree.nodes, tree.root, read, summary = null),
+      )
+    }
+
+  /** Taps element [id] of [observation], which the runner has just taken and checked. */
+  suspend fun agentTap(observation: AgentObservation, id: Int): ActionOutcome {
+    val shot = observation.snapshot ?: return ActionOutcome(false, "The screen was not read")
+    val element = shot.read.element(id) ?: return ActionOutcome(false, "No element [$id]")
+    return outcome(tap(shot, element))
+  }
+
+  suspend fun agentType(observation: AgentObservation, id: Int, text: String, submit: Boolean): ActionOutcome {
+    val shot = observation.snapshot ?: return ActionOutcome(false, "The screen was not read")
+    val element = shot.read.element(id) ?: return ActionOutcome(false, "No element [$id]")
+    return outcome(type(shot, element, text, submit))
+  }
+
+  suspend fun agentScroll(observation: AgentObservation, down: Boolean): ActionOutcome {
+    val shot = observation.snapshot ?: return ActionOutcome(false, "The screen was not read")
+    return outcome(scroll(shot, down))
+  }
+
+  fun agentBack(): ActionOutcome =
+    if (performGlobalAction(GLOBAL_ACTION_BACK)) ActionOutcome(true, "Back pressed") else ActionOutcome(false, "Back failed")
+
+  fun agentHome(): ActionOutcome =
+    if (performGlobalAction(GLOBAL_ACTION_HOME)) ActionOutcome(true, "Home pressed") else ActionOutcome(false, "Home failed")
+
+  /**
+   * Opens [url] (or Firefox's private home page) in a new private tab. Allowed from the background
+   * because the system binds this service; the first launch of a run comes from the visible app.
+   */
+  fun agentOpenPrivateTab(url: String?): ActionOutcome {
+    val intent =
+      FirefoxLaunch.privateTab(packageManager, url)
+        ?: return ActionOutcome(false, if (FirefoxLaunch.installedPackage(packageManager) == null) "Firefox is not installed" else "Address refused")
+    return try {
+      startActivity(intent)
+      ActionOutcome(true, "Sent to Firefox")
+    } catch (e: Exception) {
+      ActionOutcome(false, "Firefox did not start (${e.javaClass.simpleName})")
+    }
+  }
+
+  /** Brings PhoneAgent back to the front at the end of a run, as it was left. */
+  fun returnToPhoneAgent() {
+    val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return
+    runCatching {
+      startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
+    }
+  }
+
+  private fun outcome(result: String): ActionOutcome =
+    ActionOutcome(ok = !result.startsWith("Failed") && !result.startsWith("Refused"), detail = result)
 
   companion object {
     const val COMMAND_DELAY_MS = 5000L

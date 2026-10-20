@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery.data
 
 import com.google.ai.edge.gallery.huggingface.HuggingFaceApiClient
+import com.google.ai.edge.gallery.phoneagent.task.PHONE_AGENT_TASK_ID
 import com.google.ai.edge.gallery.proto.LlmConfig
 import com.google.ai.edge.gallery.proto.llmConfig
 
@@ -48,6 +49,8 @@ fun Model.getTargetTaskIdsForImportedModel(): Set<String> {
     if (llmProfile?.supportMobileActions == true) {
       add(BuiltInTaskId.LLM_MOBILE_ACTIONS)
     }
+    // PhoneAgent fork: imported .litertlm models can run Phone Agent (with a warning).
+    if (isLiteRtLm) add(PHONE_AGENT_TASK_ID)
   }
 }
 

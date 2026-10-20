@@ -69,7 +69,7 @@ class LoopGuard(
   fun onAction(actionKey: String, screenKey: String): Verdict {
     invalidInARow = 0
     return if (!seen.add("$actionKey\u0000$screenKey")) {
-      Verdict.Abort("Stopped: the same action on the same screen again ($actionKey).")
+      Verdict.Abort("Stopped: the same action on the same screen again.")
     } else {
       Verdict.Continue
     }

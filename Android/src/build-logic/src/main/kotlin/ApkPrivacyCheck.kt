@@ -103,6 +103,7 @@ internal object ApkRules {
       "android.permission.READ_EXTERNAL_STORAGE",
       "android.permission.FOREGROUND_SERVICE",
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+      "android.permission.FOREGROUND_SERVICE_SPECIAL_USE", // Phase 2: Phone Agent runs
       "android.permission.POST_NOTIFICATIONS",
       "android.permission.WAKE_LOCK",
     )
@@ -115,7 +116,11 @@ internal object ApkRules {
     )
 
   /** Debug-only tooling that may be exported in debug builds. */
-  val APPROVED_EXPORTED_DEBUG = setOf("androidx.compose.ui.tooling.PreviewActivity")
+  val APPROVED_EXPORTED_DEBUG =
+    setOf(
+      "androidx.compose.ui.tooling.PreviewActivity",
+      "androidx.activity.ComponentActivity", // Compose UI test host (ui-test-manifest, debug only)
+    )
 
   /** Exported components guarded by these permissions can only be reached by the system or adb. */
   val SYSTEM_PERMISSIONS =
@@ -123,6 +128,7 @@ internal object ApkRules {
       "android.permission.BIND_JOB_SERVICE",
       "android.permission.DUMP",
       "android.permission.BIND_ACCESSIBILITY_SERVICE",
+      "android.permission.BIND_QUICK_SETTINGS_TILE",
     )
 
   /** androidx.startup initializers that must not run at startup. */

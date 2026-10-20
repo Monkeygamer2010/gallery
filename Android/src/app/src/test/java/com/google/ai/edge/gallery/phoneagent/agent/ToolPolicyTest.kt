@@ -66,6 +66,17 @@ class ToolPolicyTest {
   }
 
   @Test
+  fun neverReadsOrOperatesFirefoxsOwnSettingsAndMenus() {
+    val settings = PRIVATE_FIREFOX.copy(browserOwnScreen = true)
+    assertTrue(ToolPolicy.readDecision(settings, OWN) is Decision.Refuse)
+    assertTrue(!allowed(AgentAction.Tap(1), settings, LINK))
+    assertTrue(!allowed(AgentAction.Scroll(ScrollDirection.DOWN), settings))
+    // Back leaves a menu or settings page, but only in private mode.
+    assertTrue(allowed(AgentAction.Back, settings))
+    assertTrue(!allowed(AgentAction.Back, NORMAL_FIREFOX.copy(browserOwnScreen = true)))
+  }
+
+  @Test
   fun neverTypesIntoPasswordFields() {
     assertTrue(allowed(AgentAction.TypeText(2, "munich", submit = true), element = INPUT))
     val decision = ToolPolicy.check(AgentAction.TypeText(3, "hunter2", submit = false), PRIVATE_FIREFOX, OWN, PASSWORD)

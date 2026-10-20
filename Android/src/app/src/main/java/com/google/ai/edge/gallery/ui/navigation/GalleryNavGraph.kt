@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery.ui.navigation
 
 import com.google.ai.edge.gallery.phoneagent.os.isInternalLink
+import com.google.ai.edge.gallery.phoneagent.task.FollowPhoneAgentRequests
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -439,6 +440,11 @@ fun GalleryNavHost(
       filePath = MODEL_ALLOWLIST_TEST_FILE_PATH,
       onDismiss = { modelManagerViewModel.dismissLocalTestAllowlistDialog() },
     )
+  }
+
+  // PhoneAgent fork: open the Phone Agent task when its Quick Settings popup asks for it.
+  FollowPhoneAgentRequests(modelManagerViewModel) { taskId, modelName ->
+    navController.navigate("$ROUTE_MODEL/$taskId/$modelName")
   }
 
   // Handle incoming intents for deep links
