@@ -28,7 +28,14 @@ import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 
 /**
  * Keeps the system's own capture features away from what the app shows (docs/NETWORK.md, "Traffic
- * made by other apps"):
+ * made by other apps").
+ *
+ * Call it at the end of onCreate, after `installSplashScreen()`. It reads `window.decorView`, which
+ * builds the window from the current theme; before the splash library switches to the app theme
+ * that is the splash theme (`Theme.DeviceDefault.DayNight` on API 31+), whose action bar would
+ * then be drawn over the app's own top bar.
+ *
+ * What it turns off:
  * - content capture: the system intelligence service would receive the text on screen;
  * - autofill: autofill services (password managers) would receive the window's text fields;
  * - the Recents screen would keep a screenshot of the last screen (Android 13+).

@@ -21,5 +21,10 @@
     <item name="windowSplashScreenBackground">#FF131314</item>
     <item name="windowSplashScreenAnimatedIcon">@drawable/phoneagent_splash_icon</item>
     <item name="postSplashScreenTheme">@style/Theme.Gallery</item>
+    <!-- PhoneAgent fork: the splash theme derives from Theme.DeviceDefault.DayNight on API 31+,
+         which has an action bar. If the window were ever built before installSplashScreen()
+         switches themes, that bar would cover the app's top bar. The app never wants one. -->
+    <item name="android:windowActionBar">false</item>
+    <item name="android:windowNoTitle">true</item>
   </style>
 </resources>

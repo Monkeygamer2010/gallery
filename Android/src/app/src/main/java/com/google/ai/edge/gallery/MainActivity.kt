@@ -82,7 +82,6 @@ class MainActivity : ComponentActivity(), VirtualDevicePermissionsHost {
     // This prevents Jetpack Compose from automatically restoring the previous screen
     // and forces the app to start cleanly on the Home Screen after an OS kill.
     super.onCreate(null)
-    optOutOfOsCapture(this) // PhoneAgent fork: no content capture, autofill or Recents screenshot
 
     fun setContent() {
       if (contentSet) {
@@ -177,6 +176,9 @@ class MainActivity : ComponentActivity(), VirtualDevicePermissionsHost {
     }
     // Keep the screen on while the app is running for better demo experience.
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    // PhoneAgent fork: no content capture, autofill or Recents screenshot. It touches the window,
+    // so it must run after installSplashScreen() has switched to the app theme.
+    optOutOfOsCapture(this)
   }
 
   override fun onNewIntent(intent: Intent) {
