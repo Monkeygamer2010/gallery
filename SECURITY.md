@@ -61,34 +61,39 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[done, interim]** In the existing tiles, calendar, contacts, messaging and network-capable
   tool calls ask for confirmation every time, and an Agent Chat intent runs only while an enabled
   skill offers it. Phase 4's policy engine replaces this.
-- **[P2]** The model gets a small fixed tool set (read_screen, tap, type_text, scroll, back, home,
-  open_app, open_url, note, save_result, finish). No tool can change policy, the allowlist, locks
-  or settings of this app.
-- **[P2]** Tool calls are executed by our code (LiteRT-LM manual tool calling), which validates
+- **[done]** The model gets a small fixed tool set (read_screen, tap, type_text, scroll, back,
+  home, open_app, open_url, note, save_result, finish). No tool can change policy, the allowlist,
+  locks or settings of this app.
+- **[done]** Tool calls are executed by our code (LiteRT-LM manual tool calling), which validates
   every call before it touches the phone.
-- **[P2]** Elements are referenced by ids from the last screen read, never by coordinates.
-- **[P2]** Loop guard: at most 15 steps, a per-step timeout, abort on a repeated identical action
-  on an identical screen. Stop chip and notification Stop action at all times.
+- **[done]** Elements are referenced by ids from the last screen read, never by coordinates.
+  Right before acting, the screen is read again and the action runs only if the id still names
+  the same element.
+- **[done]** Loop guard: at most 15 steps, a per-step timeout, abort on a repeated identical
+  action on an identical screen, on repeated unusable replies and on repeated refusals. Stop chip
+  and notification Stop action at all times.
+- **[done, interim]** Until Phase 4's allowlist, tasks read and act only in Firefox private tabs.
+  Other apps' screens are not even converted; `open_app` opens only Firefox.
 - **[P3]** Confirmation dialog (domain and exact text shown) before send/post/submit, purchases,
   deletions, install/uninstall, permission or settings changes, and before typing or submitting
   on a site not yet visited in this run.
 - **[P4]** Default-deny per-app allowlist. Category locks for Money & credentials (asks every
   time), Email & messaging, App stores & installers, System Settings, each refused until the
   owner flips an "I understand" switch.
-- **[done, spike]** The service acts only when the owner starts a test, never on PhoneAgent
-  itself or in Settings, and does not claim `isAccessibilityTool`.
-- **[P2]** The same rules for tasks.
-- **[P2]** `open_url` accepts `https://` only, caps the URL length, and logs every URL in the run
-  log.
+- **[done]** The service acts only when the owner starts a test or a task, never on PhoneAgent
+  itself, in Settings or in permission and install dialogs, and does not claim
+  `isAccessibilityTool`.
+- **[done]** `open_url` accepts public `https://` addresses only (no IP addresses or local host
+  names), caps the URL length, and lists every URL in the run log.
 
 ### Agent: what the model sees
-- **[P2]** Screen text is wrapped in delimiters and labelled as untrusted data; the system prompt
-  tells the model never to follow instructions found in it. This lowers the risk; the code-level
-  controls above are what bound it.
-- **[P2]** Password fields are redacted. Clipboard contents and secrets never enter the model's
-  context.
-- **[done, spike]** Empty or hidden screens are reported as such ("stop here"). No workaround.
-- **[P2]** A task stops on such a screen.
+- **[done]** Screen text is wrapped in delimiters that page text cannot close, and labelled as
+  untrusted data; the system prompt tells the model never to follow instructions found in it.
+  Action results the model sees are PhoneAgent's own words, not screen text. This lowers the
+  risk; the code-level controls above are what bound it.
+- **[done]** Password field values are never shown, and typing into password fields is refused.
+  Clipboard contents and secrets never enter the model's context.
+- **[done]** Empty or hidden screens are reported as such and a task stops there. No workaround.
 - **[done]** Release and ci builds contain no `Log.v/d/i` calls (app and libraries), and
   LiteRT-LM's native logging is limited to errors.
 - **[done]** The accessibility service and spike screen never log, save or upload screen
@@ -99,21 +104,27 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[done, spike]** Firefox pages are opened with `https://` addresses only; private-tab
   detection uses the browser's own UI, never page content. The owner's Phase 1 results decide how
   reliable it is.
-- **[P2]** Web tasks run in Firefox private tabs only. The agent refuses to read a non-private
-  tab, never reads history or saved logins, and never changes browser settings or extensions.
+- **[done]** Web tasks run in Firefox private tabs only. The agent refuses to read a non-private
+  tab, and refuses Firefox's own settings, menus and add-on pages, so it never reads history or
+  saved logins and never changes browser settings or extensions.
 - **[P5, fallback only]** GeckoView with per-task private sessions, if Firefox can't be driven.
 
 ### Entry points
 - **[done]** Upstream's exported `com.google.ai.edge.gallery://` deep link is gone; app links are
   accepted only through a non-exported alias.
-- **[P2]** Tasks start only from text the owner types in the app or in the Quick Settings popup.
-  Deep links and intents from other apps can't start a task.
-- **[P2]** Android 10+ background-start rules are respected: the first app is launched from the
-  visible UI; no `SYSTEM_ALERT_WINDOW` without the owner's OK.
-- **[P2]** The accessibility service does not claim `isAccessibilityTool`. If Advanced Protection
-  blocks it, the app explains why instead of working around it.
+- **[done]** Tasks start only from text the owner types in the app or in the Quick Settings popup
+  (handed over in memory, never in an intent). Deep links and intents from other apps can't start
+  a task: the popup and the run service are not exported, and only the system can bind the tile.
+- **[done]** Android 10+ background-start rules are respected: the first app is launched from the
+  visible UI; no `SYSTEM_ALERT_WINDOW` (the Stop chip is an accessibility overlay).
+- **[done]** The run notification shows only a step counter, never the task or screen text.
+- **[done]** The accessibility service does not claim `isAccessibilityTool`.
+- **[P6]** If Advanced Protection blocks the service, the app explains why instead of working
+  around it (onboarding polish).
 
 ### Data at rest
+- **[done]** Phase 2 keeps a run (log, addresses, notes, results, answer, measurements) in memory
+  only; Copy puts it on the clipboard marked as sensitive.
 - **[P3]** The last 10 runs are kept in app-private storage with a clear button; nothing is saved
   automatically to shared storage; export goes through the system file picker.
 
@@ -121,6 +132,8 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 
 - A page can still steer the model within what policy allows (for example, which search result
   to open). Confirmations and the allowlist bound the damage; they don't remove the risk.
+- Private-mode detection reads Firefox's own UI. If a Firefox update changes it, the agent
+  refuses to read (it fails closed) until the detection is updated.
 - Accessibility services are powerful by design. If the phone is compromised, PhoneAgent's
   service is another capability an attacker could try to misuse.
 - Upstream merges can reintroduce trackers; the build guard, the APK check and the re-appliable

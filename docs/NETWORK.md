@@ -7,7 +7,8 @@ phone.
 
 Last full review: Phase 0.1 (2026-10-18), after an independent audit of Phase 0: every network
 call site in the Kotlin sources, the skill assets, the merged manifest, the dex files and the
-native libraries in the built APK.
+native libraries in the built APK. Phase 1 and Phase 2 added no network code; the APK check
+still finds no socket or DNS imports in native code.
 
 ## What the app connects to
 
@@ -21,7 +22,7 @@ native libraries in the built APK.
 | 5 | Agent Chat skills (JS skills in a WebView) | `SKILL.md` from a skill URL you add; for a skill whose **Allow network** switch you turned on: whatever its pages load (for example `query-wikipedia` calls `<lang>.wikipedia.org`, `interactive-map` shows Google Maps) | Adding a skill from a URL; running a skill with network allowed. Every such call asks first | Yes. **Allow network** is off for every skill by default |
 | 6 | Agent Chat MCP servers | the MCP server URLs you add | Adding a server; while Agent Chat is on screen, enabled servers only. Connections close when you leave Agent Chat or the app goes to the background. Every tool call asks first | Yes. None configured by default |
 | 7 | Links in the UI (`ClickableLink`, skill homepages, Tiny Garden credits) | any | Tapping a link opens it in your browser; the browser makes the connection (see "Traffic made by other apps") | Yes |
-| 8 | Phone Agent spike (Phase 1) and tasks (Phase 2+) | the `https://` page you open from the spike screen; later, sites a task visits | Firefox's own traffic after you tap **Open** in the spike tools or start a task. The accessibility service itself makes no connections | Yes |
+| 8 | Phone Agent spike (Phase 1) and tasks (Phase 2) | the `https://` page you open from the spike screen; the public `https://` pages a task opens (every address is listed in the run log) and the links it taps | Firefox's own traffic, in private tabs, after you tap **Open** in the spike tools or start a task. The model runs on the phone: PhoneAgent's process, the accessibility service, the run service and the Quick Settings tile make no connections | Yes |
 
 Nothing else from the app's own process. In particular:
 
@@ -75,7 +76,7 @@ PCAPdroid attributes that traffic to the other app, not to PhoneAgent.
 | What | Other app | When | What the fork does |
 |---|---|---|---|
 | Links, skill homepages, credits | your default browser (Firefox) | only when you tap a link | Nothing at startup: the Hugging Face login service (AppAuth), which binds the browser's Custom Tabs service and warms it up, is created only when a login is actually started, and login is not configured |
-| Phone Agent tasks (Phase 2+) | Firefox | while a task you started runs | Firefox's own telemetry settings apply; set them in Firefox |
+| Phone Agent tasks (Phase 2+) | Firefox | while a task you started runs | Pages open in private tabs only. Firefox's own telemetry settings apply; set them in Firefox. uBlock Origin set to run in private browsing blocks trackers on the pages |
 | Hold-to-dictate | the on-device speech recognizer | while you hold the mic button | Only the on-device recognizer is used, with "prefer offline"; the button is hidden when the phone has none. The default (cloud-capable) recognizer is never used |
 | Email, SMS, calendar, contacts, maps (Agent Chat skills, Mobile Actions) | your mail, messages, calendar, contacts and maps apps | after you tap **Allow once** | The other app opens with the content filled in; it sends nothing until you act in it (maps apps look up the place) |
 | Location names for photos | location services (Google Play services) | never | Removed: Smart Album shows raw coordinates |

@@ -98,8 +98,8 @@ it by editing this file.
 
 ## Architecture
 
-- `CustomTask` in `customtasks/phoneagent`, modelled on mobileactions; Hilt `@Provides @IntoSet`;
-  `keepModelAlive = true`.
+- `CustomTask` in `phoneagent/task` (all fork code lives under `phoneagent/`), modelled on
+  mobileactions; Hilt `@Provides @IntoSet`; `keepModelAlive = true`.
 - ToolSet (12 or fewer): `read_screen`, `tap(id)`, `type_text(id,text)`, `scroll(dir)`, `back`,
   `home`, `open_app(name)`, `open_url(url)`, `note(text)`, `save_result(title,text)`,
   `finish(summary)`. Later: compose-only intent tools (message, email, dial, alarm) that prefill
@@ -254,3 +254,61 @@ Assumptions (change any by editing here):
 - Package visibility is limited to the Firefox builds and "who handles https links".
 - The service listens only to window-change events and keeps nothing from them. No
   `SYSTEM_ALERT_WINDOW`, no overlay yet (the Stop chip is Phase 2).
+
+## Phase 2 (assumptions; change any by editing here)
+
+- **Scope until Phase 4's allowlist:** the agent reads and acts only in Firefox private tabs.
+  Other apps are refused, and their screens are not even converted: only the package and app
+  name are known. Firefox's own settings, menus and add-on pages (no web page and no home page on
+  screen) are refused too; Back is allowed there in private mode so the agent can leave.
+- `open_app` opens only Firefox, as a new private tab (`OPEN_PRIVATE_TAB` without an address).
+  `open_url` opens every address in a new private tab; public `https://` hosts only (no IP
+  addresses, `localhost`, `.local`, `.lan`, `.internal`, `.home.arpa` or `.onion`), at most 2048
+  characters. Every address is listed in the run log.
+- `note` and `save_result` exist now, in memory only (shown on the task screen with Copy). The
+  Results screen and keeping the last 10 runs stay in Phase 3.
+- `type_text` has an optional `submit` flag that presses Enter afterwards (needed for searches).
+  Typing into password fields is refused in code.
+- The system prompt suggests DuckDuckGo (`https://duckduckgo.com/?q=`) for searches and English
+  Wikipedia for facts about well-known topics, and asks the model to name the website in its
+  answer.
+- **Start** needs the accessibility service, Firefox and Firefox as the default browser.
+  Battery "Unrestricted" and notifications are recommended, not required (the Stop chip works
+  without notifications).
+- A run begins by opening Firefox's private home page from the visible task screen (the first app
+  launch comes from the visible app); later launches come from the accessibility service.
+- Model load for this task: text only (no vision or audio encoders), context of at least 4096
+  tokens, speculative decoding on when the model file supports it; if the engine does not start
+  with it, it starts without and the screen says so. Thinking is passed as `enable_thinking`, as
+  upstream does.
+- Sampling for agent steps is fixed in code (temperature 0.3, top-k 40, top-p 0.95) for steadier
+  tool choices; the model settings dialog still sets the accelerator (GPU or CPU) and maximum
+  tokens, but its sampling values don't apply to Phone Agent. Reply cap 512 tokens (2048 with
+  thinking); step timeout 60 s (180 s with thinking). Constrained decoding stays off; it is a
+  lever if tool calls turn out unreliable.
+- Loop guard: the same action on the same screen anywhere in the run (not only twice in a row)
+  ends it, as do 3 replies in a row without a usable tool call or 3 refused or failed actions in a
+  row. A tool call left as JSON in the reply text is accepted.
+- Before tapping or typing, the runner reads the screen again and acts only if the id still names
+  the role and label the model saw.
+- Foreground service type `specialUse` (permission `FOREGROUND_SERVICE_SPECIAL_USE`, added to the
+  APK check's approved list): none of the specific types describes an agent run. Its
+  notification shows only the step counter, never the task or anything from the screen, because
+  notification listeners can read notifications.
+- When a run finishes or stops on its own, PhoneAgent comes back to the front with the answer;
+  after **Stop** you stay where you are.
+- The Stop chip is an accessibility overlay at the right edge of the screen. It is hidden and lets
+  touches through while a gesture runs, so a tap can never land on it.
+- The Quick Settings popup hands the typed task to the task screen in memory (never in an
+  intent), opens PhoneAgent and starts once the model is ready. It is excluded from Recents.
+- The model stays loaded after you leave the task screen (`keepModelAlive`); after each run a
+  plain conversation replaces the agent's, so other tasks that reuse the loaded model don't see
+  the agent's prompt and tools.
+- Run data (log with element labels, addresses, notes, results, answer, measurements) stays in
+  memory. **Copy measurements** contains no screen text and no addresses.
+- Measurements: model load time is measured around engine creation; memory is the app process's
+  PSS (`Debug.getPss()`) before the run, after each step (peak) and after the run.
+- Imported `.litertlm` models are offered in the task with a warning.
+- Phone Agent appears after upstream's tasks on the home screen (upstream's ordering list is not
+  edited, to keep the diff small).
+

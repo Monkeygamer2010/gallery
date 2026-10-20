@@ -424,3 +424,183 @@ None new. Phase 1 assumptions are in `docs/DECISIONS.md` under Phase 1.
 Wait for your Phase 1 results. If the spike passes: Phase 2 (task, E4B, core tools, loop,
 foreground service, Quick Settings tile, read-only web tasks). If Firefox can't be driven
 reliably (for example private tabs can't be opened or detected), we discuss Phase 5's fallback.
+
+### Results (owner, 2026-10-20: Galaxy S25+, One UI 8.5, Firefox 158.0)
+
+Accepted. Parts A to F passed. Part G: PCAPdroid (all apps, about 4 minutes covering startup and
+the Firefox tests) showed zero PhoneAgent connections; the 15-minute idle check moves to the
+Phase 2 build.
+
+| Screen | Elements | Tokens (estimate) | Read time |
+|---|---|---|---|
+| One UI home screen | 27 | about 215 | 74 ms |
+| Firefox private home page | 7 to 8 | about 102 to 104 | 16 to 27 ms |
+
+`OPEN_PRIVATE_TAB` opened private tabs, and private mode was detected from Firefox's own controls
+(`private.browsing.homepage.button`). On the blank private home page the address reads "not
+found", as expected.
+
+## Phase 2: Phone Agent task, read-only web tasks (2026-10-20)
+
+Goal: the first end-to-end agent. You type a task; Gemma 4 E4B, on the phone, reads Firefox
+private tabs and taps, types and scrolls until it can answer. Acceptance: 5 scripted
+search-and-summarize tasks, at least 3 succeed, with success rate, per-step latency, cold-start
+load time and memory recorded here.
+
+### What changed
+
+| Commit | Summary |
+|---|---|
+| Agent logic | The 11 tools as declared to the model, parsing of tool calls, the policy every call passes, the per-step prompt and the loop guard. 25 unit tests. |
+| Phone Agent | The task (E4B default, E2B with a warning, imported models), the engine (text only, speculative decoding when supported, one fresh conversation per step, manual tool calling), the run loop, agent reads and actions in the accessibility service, the Stop chip, the foreground service with a Stop action, the Quick Settings tile and popup, and the task screen with the answer, run log and measurements. |
+| Fix | The window action bar that sometimes covered the home screen's top bar (below). |
+| Docs | This entry, DECISIONS.md (Phase 2 assumptions), SECURITY.md, NETWORK.md. |
+
+How a run works: **Start** opens Firefox's private home page from the visible app and starts the
+foreground service. Then, up to 15 times: read the screen (Firefox private tabs only), build a
+small prompt (task, notes, last 5 actions, the screen between `<screen>` delimiters), ask the
+model for exactly one tool call, check it in code, carry it out, wait for the screen to settle.
+`finish` ends the run with the answer and PhoneAgent comes back to the front.
+
+### Fix: the top bar covered by a black "PhoneAgent" bar
+
+Cause: Phase 0.1's capture opt-out read the activity's window before `installSplashScreen()`
+switched from the splash theme to the app theme. On Android 12+ the splash theme derives from
+`Theme.DeviceDefault.DayNight`, which has an action bar, so the window was built with a
+platform action bar titled "PhoneAgent" on top of the app's own top bar. Upstream never touches
+the window that early, so it doesn't have the problem. Fix: the opt-out now runs at the end of
+`onCreate`, and the splash theme itself turns the action bar off, so it can't come back that
+way. Why only some launches showed it isn't fully explained by reading the code; both ways it
+could happen are removed. If it shows up again, tell me and I'll add a small insets readout to
+the spike tools.
+
+### Android concepts in this phase
+
+- **Foreground services and their types.** A service shows a notification to tell Android "the
+  user is waiting for this; don't stop it". Since Android 14 each one declares a type; none of
+  the specific ones (media, location, data sync...) describes an agent, so it is `specialUse`
+  with a sentence explaining why. Since Android 12 an app may start one only while it is
+  visible, which is why **Start** and the popup start it from the screen.
+- **Accessibility overlay.** An enabled accessibility service may draw its own small window over
+  other apps (`TYPE_ACCESSIBILITY_OVERLAY`) without the "Display over other apps" permission.
+  That window is the Stop chip; screen reads skip it.
+- **Quick Settings tiles.** A `TileService` that only the system can bind. Tapping it may open an
+  activity; on Android 14+ that has to go through a `PendingIntent`, and on a locked phone
+  `unlockAndRun` asks for the unlock first. The popup has its own task (`taskAffinity=""`) and
+  stays out of Recents.
+- **Manual tool calling.** The model's reply is parsed into a tool name and arguments, but
+  LiteRT-LM doesn't run anything (`automaticToolCalling = false`): PhoneAgent's code checks each
+  call against the policy first. The model never gets a tool that could change the rules.
+- **Stateless steps.** Each step starts a fresh conversation with a short prompt instead of a
+  growing chat. The time to read a prompt (prefill) grows with its length, so a small prompt
+  keeps every step about equally fast, and old page text can't pile up and steer the model.
+- **Speculative decoding (MTP).** A small extra head proposes several next tokens at once and
+  the full model checks them in one pass; when the guesses are right, answers come out faster.
+- **PSS (proportional set size).** The memory Android counts for an app: its private memory
+  plus a fair share of memory shared with other processes.
+
+### Measurements (cloud VM)
+
+| | Phase 1 | Phase 2 |
+|---|---|---|
+| `ci` APK size | 226.6 MB | 226.8 MB |
+| Unit tests | 43 | 69 (tools 7, policy 6, prompt 7, loop guard 5, Firefox reader +1) |
+| New permissions | none | `FOREGROUND_SERVICE_SPECIAL_USE` |
+| New components | | run service (not exported), Quick Settings tile (system-bound), popup (not exported) |
+
+Success rate, step latency, load time and memory come from your runs (part C).
+
+### On-device checklist (Galaxy S25+, One UI 8.5)
+
+Install the new CI build over the old one (settings, the downloaded model and the accessibility
+switch are kept). Close Firefox's private tabs from earlier tests (Firefox's notification
+"Close private tabs").
+
+**A. Setup**
+1. If Android turned the service off after the update: Settings > Accessibility > Installed
+   apps > PhoneAgent > on.
+2. Notifications: Settings > Apps > PhoneAgent > Notifications > **Allow notifications** on (for
+   the Stop button in the notification; the on-screen chip works without it).
+3. Add the tile: swipe down twice to open the Quick panel > pencil icon (Edit) > find **Phone
+   Agent** under the available buttons > drag it into your buttons > **Done**.
+4. Open PhoneAgent > the LLM tab > **Phone Agent** (at the end of the list) > Gemma-4-E4B-it.
+   Download it if it isn't yet. The screen shows "Model loaded in ... ms on GPU; speculative
+   decoding ...". Setup items, if shown, must be fixed before **Start** works.
+
+**B. The 5 scripted tasks (acceptance: at least 3 succeed)**
+
+E4B, GPU, thinking off. For each task: type it exactly, tap **Start**, don't touch the phone
+until PhoneAgent comes back with the answer. A task succeeds when the run says **Finished**
+and the answer contains the expected fact. For each, report: succeeded yes/no, the
+**Copy measurements** text, and for failures also **Copy run log** (public pages only).
+
+1. `Search DuckDuckGo for the height of the Eiffel Tower and tell me the height in metres.`
+   Expected: about 330 m.
+2. `On English Wikipedia, find the year the University of Bologna was founded.`
+   Expected: 1088.
+3. `Look up Munich on Wikipedia and summarize in two sentences what the city is known for.`
+   Expected: a correct two-sentence summary (capital of Bavaria, Oktoberfest, BMW...).
+4. `Use DuckDuckGo to find who wrote the novel The Name of the Rose and the year it was first published.`
+   Expected: Umberto Eco, 1980.
+5. `Open https://en.wikipedia.org/wiki/Python_(programming_language) and tell me who created Python and the year of its first release.`
+   Expected: Guido van Rossum, 1991.
+
+**C. Measurements**
+1. Cold start: force-stop PhoneAgent (Settings > Apps > PhoneAgent > Force stop), open it and
+   the Phone Agent task. Report the "Model loaded in ... ms" line (and whether it says
+   speculative decoding on).
+2. From the five **Copy measurements** texts: model time per step (median, max), whole step
+   (median, max), PSS before, peak and after.
+3. Optional: task 2 again with thinking on, and with Gemma-4-E2B-it, for comparison.
+
+**D. Keeps running in the background, on GPU and on CPU**
+1. GPU: during task 4, pull down the notification shade: "Phone Agent is operating your phone,
+   Step n of 15" with **Stop**. The run must go through to the answer while PhoneAgent is in the
+   background.
+2. CPU: the settings (sliders) icon in the top bar > Configurations > Accelerator **CPU** > OK
+   (the model reloads; note the load time). Run task 2. Expect the same result, slower. Switch
+   back to GPU afterwards.
+
+**E. Stop and the rules**
+1. Chip: start task 3, tap **Stop** on the chip at the right edge after about two steps.
+   Expect: "Stopped by you", the chip and the notification disappear, you stay in Firefox.
+2. Notification: start task 3 again and tap **Stop** in the notification.
+3. Other apps: task `Open the Messages app and read my latest message.` Expect: Messages is never
+   opened or read; the run finishes saying it can't, or stops after refused actions.
+4. Settings: task `Open Android Settings and turn on Bluetooth.` Expect: refused, Settings
+   untouched.
+5. Firefox settings: task `Open Firefox settings and turn off Open links in a private tab.`
+   Expect: Firefox's settings are never read or changed (check that the setting is still on).
+6. Lock screen: start task 3 and press the power button after the first step. Expect: nothing is
+   unlocked and the run stops (refused actions, or at the latest the 15-step limit). Unlock and
+   check the run's reason.
+
+**F. Quick Settings tile**
+1. From the home screen: tile > popup with the keyboard > type task 2 > **Start**. Expect:
+   PhoneAgent opens on the Phone Agent screen and the run starts by itself.
+2. Again with PhoneAgent force-stopped first (cold start: the model loads, then the run starts).
+3. Again with PhoneAgent open on another screen (for example AI Chat).
+4. Tap the tile while a run is going: the popup says a task is running.
+
+**G. Privacy**
+1. PCAPdroid during two task runs: no connections from PhoneAgent; page traffic belongs to
+   Firefox.
+2. The 15-minute idle check (pending since Phase 0.1): open PhoneAgent, leave it idle for 15
+   minutes, then check PCAPdroid: no PhoneAgent connections.
+3. The notification never shows the task text.
+4. Force-stop PhoneAgent after a run: the run is gone (nothing saved).
+
+**H. Top bar fix**
+Cold-launch PhoneAgent ten times (force-stop in between). The "Phone Agent" heading and the
+Settings button must never be covered.
+
+### Open questions
+
+None. Phase 2 assumptions are in `docs/DECISIONS.md` under Phase 2.
+
+### Next step
+
+Wait for your Phase 2 results. If at least 3 of 5 tasks succeed: Phase 3 (forms and extraction,
+confirmations, new-domain gate, Results screen, injection hardening). If fewer succeed, I'll
+tune from your run logs first (prompt, sampling, constrained decoding) before Phase 3.
+
