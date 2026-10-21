@@ -25,7 +25,9 @@ import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.markInitializationFailed
 import com.google.ai.edge.gallery.data.markInitializationStarted
 import com.google.ai.edge.gallery.data.markInitialized
+import com.google.ai.edge.gallery.data.resetInitialization
 import com.google.ai.edge.gallery.phoneagent.os.limitNativeEngineLogging
+import com.google.ai.edge.gallery.ui.llmchat.LlmChatModelHelper
 import com.google.ai.edge.gallery.ui.llmchat.LlmModelInstance
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
@@ -41,6 +43,8 @@ import com.google.ai.edge.litertlm.ModelInfo
 import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.tool
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
@@ -66,13 +70,17 @@ class AgentError(message: String) : Exception(message)
 data class ModelReply(val toolCalls: List<Pair<String, Map<String, Any?>>>, val text: String, val ms: Long)
 
 /**
- * Loads the model for Phone Agent and runs one stateless step at a time.
+ * Owns Phone Agent's engine and runs one stateless step at a time.
  *
+ * - One engine at a time, owned here (outside any activity): a screen, a recreated activity or a
+ *   new model manager asking for the same model gets the loaded engine; asking for another model
+ *   or accelerator closes the old engine first. Before this, the engine of a finished activity
+ *   stayed in memory and the next launch (for example from the tile) loaded a second one.
  * - Text only: no vision or audio encoders, which saves memory and load time.
  * - Speculative decoding (multi-token prediction) is on when the model file supports it.
  * - Each step gets a fresh conversation with the system prompt and the tool declarations, and
  *   `automaticToolCalling = false`: LiteRT-LM only parses the tool call; PhoneAgent's own code
- *   checks it and carries it out. Only one conversation exists at a time.
+ *   checks it and carries it out. The previous step's conversation is closed first.
  */
 @OptIn(ExperimentalApi::class)
 object AgentEngine {
@@ -91,6 +99,20 @@ object AgentEngine {
   /** The last engine load in this process, or null. */
   val lastLoad: StateFlow<EngineLoad?> = loadFlow.asStateFlow()
 
+  private val enginesFlow = MutableStateFlow(0)
+
+  /** Engines Phone Agent has loaded and not closed (0 or 1). */
+  val loadedEngines: StateFlow<Int> = enginesFlow.asStateFlow()
+
+  private class Loaded(val key: String, val modelName: String, val instance: LlmModelInstance, var owner: Model)
+
+  /** Held while an engine loads (seconds): the main thread only ever tries it. */
+  private val lock = ReentrantLock()
+  private var loaded: Loaded? = null
+
+  private fun keyOf(path: String, accelerator: Accelerator, maxTokens: Int, name: String) =
+    "$name|$path|${accelerator.label}|$maxTokens"
+
   private val toolProviders by lazy {
     AgentTools.SPECS.map { spec ->
       tool(
@@ -106,13 +128,37 @@ object AgentEngine {
 
   /** Loads [model]; called by the task on a background thread. [onDone] gets "" or an error. */
   fun initialize(context: Context, model: Model, onDone: (String) -> Unit) {
+    ModelKeeper.install(context)
+    lock.withLock { initializeLocked(context, model, onDone) }
+  }
+
+  private fun initializeLocked(context: Context, model: Model, onDone: (String) -> Unit) {
+    val accelerator = model.currentAccelerator ?: Accelerator.GPU
+    val path = model.getPath(context)
+    val maxTokens =
+      maxOf(model.getIntConfigValue(key = ConfigKeys.MAX_TOKENS, defaultValue = DEFAULT_MAX_TOKEN), MIN_CONTEXT_TOKENS)
+    val key = keyOf(path, accelerator, maxTokens, model.name)
+    val current = loaded
+    if (current != null && current.key == key) {
+      // The same model is loaded: hand it over instead of loading a second engine.
+      if (current.owner !== model) {
+        val previous = current.owner
+        current.owner = model
+        if (previous.instance === current.instance) previous.resetInitialization()
+      }
+      model.markInitialized(current.instance)
+      onDone("")
+      return
+    }
+    // Another model or accelerator: close the old engine before loading the new one.
+    if (current != null) closeLocked(current)
     if (model.instance != null) {
+      // Loaded by another task's helper; use it as it is.
       onDone("")
       return
     }
     model.markInitializationStarted()
     val start = SystemClock.elapsedRealtime()
-    val accelerator = model.currentAccelerator ?: Accelerator.GPU
     val backend =
       when (accelerator) {
         Accelerator.CPU -> Backend.CPU()
@@ -120,9 +166,6 @@ object AgentEngine {
         Accelerator.NPU,
         Accelerator.TPU -> Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
       }
-    val path = model.getPath(context)
-    val maxTokens =
-      maxOf(model.getIntConfigValue(key = ConfigKeys.MAX_TOKENS, defaultValue = DEFAULT_MAX_TOKEN), MIN_CONTEXT_TOKENS)
     val supportsSpeculative =
       runCatching {
           ModelInfo.from(path).use { info -> (info as? ModelInfo.Llm)?.hasSpeculativeDecodingSupport() == true }
@@ -172,7 +215,10 @@ object AgentEngine {
           runCatching { engine.close() }
           throw e
         }
-      model.markInitialized(LlmModelInstance(engine = engine, conversation = conversation, metricsTracker = null))
+      val instance = LlmModelInstance(engine = engine, conversation = conversation, metricsTracker = null)
+      loaded = Loaded(key, model.name, instance, model)
+      enginesFlow.value = 1
+      model.markInitialized(instance)
       loadFlow.value =
         EngineLoad(model.name, accelerator.label, speculative, SystemClock.elapsedRealtime() - start)
       onDone("")
@@ -246,6 +292,58 @@ object AgentEngine {
           )
       }
     }
+
+  /**
+   * Releases [model]'s engine: Phone Agent's own engine is closed here; an engine another task
+   * loaded goes to upstream's clean-up.
+   */
+  fun release(model: Model, onDone: () -> Unit) {
+    val ours =
+      lock.withLock {
+        val current = loaded
+        if (current != null && model.instance === current.instance) {
+          closeLocked(current)
+          true
+        } else {
+          false
+        }
+      }
+    if (ours || model.instance == null) onDone() else LlmChatModelHelper.cleanUp(model = model, onDone = onDone)
+  }
+
+  /** Unloads Phone Agent's engine, if any (call it off the main thread). Returns whether one was closed. */
+  fun releaseAll(): Boolean =
+    lock.withLock {
+      val current = loaded ?: return false
+      closeLocked(current)
+      true
+    }
+
+  /**
+   * Called before any task loads a model (data/ModelManagerViewModel.initializeModel): Phone
+   * Agent's engine is closed first unless it is that model's or a task is running.
+   */
+  fun beforeAnyModelLoad(model: Model) {
+    if (AgentRunner.state.value.active) return
+    // Runs on the main thread: never wait for a load in progress.
+    if (!lock.tryLock()) return
+    try {
+      val current = loaded ?: return
+      if (current.owner === model || current.modelName == model.name) return
+      closeLocked(current)
+    } finally {
+      lock.unlock()
+    }
+  }
+
+  private fun closeLocked(current: Loaded) {
+    loaded = null
+    runCatching { current.instance.conversation.cancelProcess() }
+    runCatching { current.instance.conversation.close() }
+    runCatching { current.instance.engine.close() }
+    if (current.owner.instance === current.instance) current.owner.resetInitialization()
+    enginesFlow.value = 0
+  }
 
   private fun sampler(accelerator: Accelerator): SamplerConfig? =
     if (accelerator == Accelerator.NPU || accelerator == Accelerator.TPU) null

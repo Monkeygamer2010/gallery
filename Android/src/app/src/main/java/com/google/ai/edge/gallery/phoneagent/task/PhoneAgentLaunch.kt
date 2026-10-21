@@ -22,9 +22,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.Task
+import com.google.ai.edge.gallery.phoneagent.agent.AgentSettingsStore
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,9 +56,14 @@ object PhoneAgentLaunch {
   /** Takes the pending task, if any. */
   fun take(): String? = pendingFlow.getAndUpdate { null }
 
-  /** The model the popup opens: the first downloaded one of the task (E4B first), else E4B. */
-  fun preferredModel(task: Task, downloaded: (Model) -> Boolean): Model? =
-    task.models.firstOrNull(downloaded) ?: task.models.firstOrNull()
+  /**
+   * The model the popup opens: the tile model from the settings if it is downloaded, else the
+   * first downloaded one of the task (E4B first), else the tile model (to download it).
+   */
+  fun preferredModel(task: Task, tileModel: String, downloaded: (Model) -> Boolean): Model? {
+    val chosen = task.models.firstOrNull { it.name == tileModel }
+    return chosen?.takeIf(downloaded) ?: task.models.firstOrNull(downloaded) ?: chosen ?: task.models.firstOrNull()
+  }
 }
 
 /**
@@ -68,14 +75,16 @@ fun FollowPhoneAgentRequests(
   modelManagerViewModel: ModelManagerViewModel,
   navigate: (taskId: String, modelName: String) -> Unit,
 ) {
+  val context = LocalContext.current
   val pending by PhoneAgentLaunch.pending.collectAsState()
   val uiState by modelManagerViewModel.uiState.collectAsState()
   val tasksReady = uiState.tasks.isNotEmpty() && !uiState.loadingModelAllowlist
   LaunchedEffect(pending, tasksReady) {
     if (pending == null || !tasksReady || PhoneAgentLaunch.screenShown) return@LaunchedEffect
     val task = uiState.tasks.firstOrNull { it.id == PHONE_AGENT_TASK_ID } ?: return@LaunchedEffect
+    val tileModel = AgentSettingsStore.load(context).tileModel
     val model =
-      PhoneAgentLaunch.preferredModel(task) {
+      PhoneAgentLaunch.preferredModel(task, tileModel) {
         uiState.modelDownloadStatus[it.name]?.status == ModelDownloadStatusType.SUCCEEDED
       } ?: return@LaunchedEffect
     navigate(task.id, model.name)

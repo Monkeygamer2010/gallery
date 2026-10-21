@@ -95,6 +95,12 @@ class ToolPolicyTest {
     assertTrue(allowed(AgentAction.Finish("done"), anywhere))
     assertTrue(allowed(AgentAction.Note("n"), anywhere))
     assertTrue(!allowed(AgentAction.OpenApp("Settings"), anywhere))
+    // The refusal tells the model to explain and finish, not to try it in the browser.
+    val refusal = ToolPolicy.check(AgentAction.OpenApp("Messages"), anywhere, OWN, null) as Decision.Refuse
+    assertTrue(refusal.reason.contains("Call finish"))
+    assertTrue(refusal.reason.contains("Don't try to do it in the browser"))
+    val stale = ToolPolicy.check(AgentAction.Tap(9), PRIVATE_FIREFOX, OWN, null) as Decision.Refuse
+    assertTrue(stale.reason.contains("Ids change after every action"))
     assertTrue(!allowed(AgentAction.OpenApp("Messages"), anywhere))
     assertTrue(!allowed(AgentAction.OpenApp("Chrome"), anywhere))
   }

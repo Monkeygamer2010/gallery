@@ -39,7 +39,7 @@ class AgentToolsTest {
   fun declaresAtMostTwelveToolsWithValidJson() {
     assertTrue(AgentTools.SPECS.size <= 12)
     assertEquals(
-      setOf("read_screen", "tap", "type_text", "scroll", "back", "home", "open_app", "open_url", "note", "save_result", "finish"),
+      setOf("tap", "type_text", "scroll", "back", "home", "open_app", "open_url", "note", "save_result", "finish"),
       AgentTools.NAMES,
     )
     for (spec in AgentTools.SPECS) {
@@ -69,7 +69,9 @@ class AgentToolsTest {
 
   @Test
   fun parsesEveryTool() {
-    assertEquals(AgentAction.ReadScreen, ok("read_screen"))
+    // There is no read_screen: every step shows the screen already. A call says so.
+    assertTrue(invalid("read_screen").contains("current screen is always shown"))
+    invalid("wait")
     assertEquals(AgentAction.TypeText(2, "munich weather", submit = true), ok("type_text", mapOf("id" to 2, "text" to "munich weather", "submit" to true)))
     assertEquals(AgentAction.TypeText(2, "x", submit = false), ok("type_text", mapOf("id" to 2, "text" to "x")))
     assertEquals(AgentAction.TypeText(2, "x", submit = true), ok("type_text", mapOf("id" to 2, "text" to "x", "submit" to "true")))

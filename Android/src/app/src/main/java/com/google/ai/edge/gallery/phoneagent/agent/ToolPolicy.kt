@@ -96,14 +96,17 @@ object ToolPolicy {
    */
   fun check(action: AgentAction, facts: ScreenFacts, ownPackage: String, element: Element?): Decision =
     when (action) {
-      AgentAction.ReadScreen,
       is AgentAction.Note,
       is AgentAction.SaveResult,
       is AgentAction.Finish,
       AgentAction.Home -> Decision.Allow
       is AgentAction.OpenApp ->
         if (appTarget(action.name) != null) Decision.Allow
-        else Decision.Refuse("Only Firefox can be opened. Use open_app(\"Firefox\") or open_url.")
+        else
+          Decision.Refuse(
+            "Only Firefox is available in Phone Agent, so this can't be done here. Call finish and " +
+              "briefly explain that to the owner. Don't try to do it in the browser."
+          )
       is AgentAction.OpenUrl ->
         if (safeUrl(action.url) != null) Decision.Allow
         else Decision.Refuse("Only public https:// addresses can be opened, at most ${FirefoxReader.MAX_URL_LENGTH} characters.")
@@ -149,5 +152,8 @@ object ToolPolicy {
     readDecision(facts, ownPackage) as? Decision.Refuse
 
   private fun noElement(id: Int) =
-    Decision.Refuse("There is no element [$id] on the current screen. Use an id from the current screen.")
+    Decision.Refuse(
+      "There is no element [$id] on the current screen. Ids change after every action: use an id " +
+        "from the current screen."
+    )
 }

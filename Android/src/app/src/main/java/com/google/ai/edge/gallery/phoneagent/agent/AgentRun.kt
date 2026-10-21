@@ -31,6 +31,13 @@ enum class RunStatus {
 /** One line of the run log the owner sees. Kept in memory only; copied only on request. */
 data class LogEntry(val step: Int, val text: String)
 
+/**
+ * What the model saw in one step: the exact observation text, its counts and how the screen's
+ * nodes were classified. Screen text (public pages only during tests); memory only, copied only
+ * on request.
+ */
+data class StepObservation(val step: Int, val summary: String, val classification: String, val text: String)
+
 /** Timing of one step. Contains no screen content. */
 data class StepMetrics(
   val step: Int,
@@ -39,7 +46,7 @@ data class StepMetrics(
   val observeMs: Long,
   /** The model producing its reply (prefill and decode). */
   val modelMs: Long,
-  /** Carrying out the action, including the wait for the screen to settle. */
+  /** Carrying out the action and waiting for the screen to settle. */
   val actMs: Long,
   val promptTokens: Int,
 )
@@ -54,10 +61,14 @@ data class RunMetrics(
   val modelLoadMs: Long? = null,
   val steps: List<StepMetrics> = emptyList(),
   val totalMs: Long = 0,
-  /** Proportional set size of the app's process in MB: before the run, highest seen, after. */
-  val pssBeforeMb: Int? = null,
+  val memoryBefore: MemoryStats? = null,
+  val memoryAfter: MemoryStats? = null,
+  /** Highest PSS seen during the run (after each step), in MB. */
   val pssPeakMb: Int? = null,
-  val pssAfterMb: Int? = null,
+  /** PSS after the previous run in this process, to compare consecutive runs. */
+  val previousRunPssAfterMb: Int? = null,
+  /** Other models loaded in this app's model list when the run started. */
+  val otherModelsLoaded: Int = 0,
 ) {
   fun report(status: RunStatus, outcome: String?): String = buildString {
     append("Phone Agent run\n")
@@ -77,13 +88,15 @@ data class RunMetrics(
       append("Prompt tokens (estimate): max ").append(steps.maxOf { it.promptTokens }).append('\n')
       for (s in steps) {
         append("  ").append(s.step).append(". ").append(s.tool).append(": read ").append(s.observeMs)
-        append(" ms, model ").append(s.modelMs).append(" ms, act ").append(s.actMs).append(" ms, ~")
+        append(" ms, model ").append(s.modelMs).append(" ms, act and settle ").append(s.actMs).append(" ms, ~")
         append(s.promptTokens).append(" tokens\n")
       }
     }
-    append("Memory (PSS): before ").append(pssBeforeMb?.let { "$it MB" } ?: "-")
-    append(", peak ").append(pssPeakMb?.let { "$it MB" } ?: "-")
-    append(", after ").append(pssAfterMb?.let { "$it MB" } ?: "-")
+    append("Memory before: ").append(memoryBefore?.line() ?: "-").append('\n')
+    append("Memory after: ").append(memoryAfter?.line() ?: "-").append('\n')
+    append("PSS peak: ").append(pssPeakMb?.let { "$it MB" } ?: "-")
+    append(", after the previous run: ").append(previousRunPssAfterMb?.let { "$it MB" } ?: "-").append('\n')
+    append("Other models loaded in this app: ").append(otherModelsLoaded)
   }
 
   private fun median(sorted: List<Long>): Long =
@@ -97,6 +110,7 @@ data class RunState(
   val step: Int = 0,
   val maxSteps: Int = LoopGuard.MAX_STEPS,
   val log: List<LogEntry> = emptyList(),
+  val observations: List<StepObservation> = emptyList(),
   val notes: List<String> = emptyList(),
   val results: List<Pair<String, String>> = emptyList(),
   /** Every address opened in this run, in order (SECURITY.md: every URL is logged). */
@@ -108,7 +122,7 @@ data class RunState(
   val active: Boolean
     get() = status == RunStatus.STARTING || status == RunStatus.RUNNING
 
-  /** The run log as text for the Copy button: actions, URLs, results and the answer. */
+  /** The run log as text for the Copy button: actions, observations, URLs, results and answer. */
   fun logText(): String = buildString {
     append("Task: ").append(goal).append('\n')
     append("Status: ").append(status.name.lowercase()).append('\n')
@@ -122,5 +136,13 @@ data class RunState(
     }
     for ((title, text) in results) append("Result \"").append(title).append("\":\n").append(text).append('\n')
     outcome?.let { append("Answer / outcome:\n").append(it).append('\n') }
+    if (observations.isNotEmpty()) {
+      append("\nWhat the model saw, step by step:\n")
+      for (o in observations) {
+        append("--- step ").append(o.step).append(": ").append(o.summary).append('\n')
+        append("nodes: ").append(o.classification).append('\n')
+        append(o.text).append('\n')
+      }
+    }
   }
 }

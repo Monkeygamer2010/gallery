@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery.phoneagent.tile
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -52,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.phoneagent.agent.AgentRunner
+import com.google.ai.edge.gallery.phoneagent.agent.AgentSettingsStore
 import com.google.ai.edge.gallery.phoneagent.agent.PromptBuilder
 import com.google.ai.edge.gallery.phoneagent.os.NoKeyboardLearning
 import com.google.ai.edge.gallery.phoneagent.os.optOutOfOsCapture
@@ -68,6 +70,7 @@ class TaskPopupActivity : ComponentActivity() {
     // Never restore saved state: the box holds what the owner typed.
     super.onCreate(null)
     optOutOfOsCapture(this)
+    if (!AgentSettingsStore.load(this).allowScreenshots) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     setContent {
       GalleryTheme {
         NoKeyboardLearning {

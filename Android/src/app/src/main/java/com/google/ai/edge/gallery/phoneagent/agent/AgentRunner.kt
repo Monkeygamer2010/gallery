@@ -17,8 +17,9 @@
 package com.google.ai.edge.gallery.phoneagent.agent
 
 import android.app.Activity
-import android.os.Debug
 import android.os.SystemClock
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.phoneagent.a11y.ActionOutcome
 import com.google.ai.edge.gallery.phoneagent.a11y.AgentObservation
@@ -43,13 +44,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Runs one Phone Agent task: observe, ask the model for one tool call, check it, carry it out,
- * repeat (docs/DECISIONS.md, Architecture). One run at a time, in this process. Everything about
- * the run ([state]) stays in memory; nothing is logged, saved or sent.
+ * wait for the screen to settle, repeat (docs/DECISIONS.md, Architecture). One run at a time, in
+ * this process. Everything about the run ([state]) stays in memory; nothing is logged, saved or
+ * sent.
  */
 object AgentRunner {
-  private const val LAUNCH_SETTLE_MS = 3000L
-  private const val SETTLE_MS = 1500L
-  private const val READ_WAIT_MS = 2000L
+  /** The longest wait for a page to load and show its text. */
+  const val PAGE_LOAD_MS = 10_000L
+  private const val FIRST_LOOK_MS = 400L
+  private const val POLL_MS = 500L
   const val STEP_TIMEOUT_MS = 60_000L
   const val STEP_TIMEOUT_THINKING_MS = 180_000L
 
@@ -57,24 +60,54 @@ object AgentRunner {
   private val stateFlow = MutableStateFlow(RunState())
   private var job: Job? = null
   @Volatile private var stopReason: String? = null
+  @Volatile private var lastRunPssAfterMb: Int? = null
 
   val state: StateFlow<RunState> = stateFlow.asStateFlow()
 
-  private class Result(val ok: Boolean, val forModel: String, val forOwner: String, val finished: Boolean = false)
+  /**
+   * How to wait after an action: for the screen to change (within [changeWithinMs]), then to
+   * hold still for two reads in a row with any web page's text present, at most [maxMs].
+   */
+  private class Wait(val expectChange: Boolean, val changeWithinMs: Long, val maxMs: Long)
+
+  private val START = Wait(expectChange = false, changeWithinMs = 0, maxMs = PAGE_LOAD_MS)
+  private val NAVIGATION = Wait(expectChange = true, changeWithinMs = 4_000, maxMs = PAGE_LOAD_MS)
+  private val TAP = Wait(expectChange = true, changeWithinMs = 2_500, maxMs = PAGE_LOAD_MS)
+  private val SMALL = Wait(expectChange = true, changeWithinMs = 1_500, maxMs = 3_000)
+  private val QUICK = Wait(expectChange = false, changeWithinMs = 0, maxMs = 1_500)
+
+  private class Result(
+    val ok: Boolean,
+    val forModel: String,
+    val forOwner: String,
+    val finished: Boolean = false,
+    /** The settled screen after the action, used as the next step's observation. */
+    val next: AgentObservation? = null,
+  )
 
   /**
-   * Starts a run for [goal], which the owner typed. Call it from a visible activity: the
-   * foreground service and Firefox's private home page (the run's first app launch) are started
-   * from there, as Android's background-start rules require. Returns an error message, or null.
+   * Starts a run for [goal], which the owner typed. Call it from the visible, resumed activity:
+   * the foreground service and Firefox's private home page (the run's first app launch) are
+   * started from there, as Android's background-start rules require. Returns an error message,
+   * or null.
    */
-  fun start(activity: Activity, model: Model, goal: String, thinking: Boolean): String? {
+  fun start(activity: Activity, model: Model, goal: String, thinking: Boolean, otherModelsLoaded: Int = 0): String? {
     if (state.value.active) return "A task is already running."
     val task = goal.trim()
     if (task.isEmpty()) return "Type a task first."
+    if ((activity as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == false) {
+      return "Open PhoneAgent to start the task."
+    }
     val service = PhoneAgentAccessibilityService.instance.value
       ?: return "Turn on the PhoneAgent accessibility service first (Setup)."
     if (model.instance !is LlmModelInstance) return "The model is not loaded yet."
     val firefox = FirefoxLaunch.privateTab(activity.packageManager, null) ?: return "Firefox is not installed."
+    // Android refuses foreground services started from the background; report it instead of crashing.
+    try {
+      AgentRunService.start(activity)
+    } catch (e: Exception) {
+      return "Android did not allow the run to start (${e.javaClass.simpleName}). Open PhoneAgent and try again."
+    }
     val load = AgentEngine.lastLoad.value?.takeIf { it.modelName == model.name }
     stopReason = null
     stateFlow.value =
@@ -88,14 +121,16 @@ object AgentRunner {
             thinking = thinking,
             speculativeDecoding = load?.speculativeDecoding ?: "unknown",
             modelLoadMs = load?.loadMs,
-            pssBeforeMb = pssMb(),
+            previousRunPssAfterMb = lastRunPssAfterMb,
+            otherModelsLoaded = otherModelsLoaded,
           ),
       )
-    AgentRunService.start(activity)
+    ModelKeeper.onRunStarted()
     try {
       activity.startActivity(firefox)
     } catch (e: Exception) {
       stateFlow.update { it.copy(status = RunStatus.ABORTED, outcome = "Firefox did not start (${e.javaClass.simpleName}).") }
+      ModelKeeper.onRunEnded()
       return "Firefox did not start."
     }
     val ownPackage = activity.packageName
@@ -130,30 +165,40 @@ object AgentRunner {
     var outcome: String? = null
     val timeout = if (thinking) STEP_TIMEOUT_THINKING_MS else STEP_TIMEOUT_MS
     try {
+      val before = MemoryProbe.read(withGraphics = true)
+      stateFlow.update { it.copy(metrics = it.metrics.copy(memoryBefore = before, pssPeakMb = before.pssMb)) }
       log(0, "Opened a Firefox private tab")
-      delay(LAUNCH_SETTLE_MS)
+      var observation = settle(service, null, START)
       stateFlow.update { it.copy(status = RunStatus.RUNNING) }
       while (true) {
         (guard.beforeStep() as? LoopGuard.Verdict.Abort)?.let {
           outcome = it.reason
           return
         }
-        val observeStart = SystemClock.elapsedRealtime()
-        val observation = service.observeForAgent()
+        val stepNumber = guard.steps + 1
+        record(stepNumber, observation)
         if (observation.empty) {
           outcome = "The screen is empty or hidden (for example a secure window). Stopped here."
           return
         }
-        val prompt = PromptBuilder.build(goal, guard.steps + 1, guard.maxSteps, notes, history, observation.modelText)
+        if (observation.view.pageWithoutContent) {
+          outcome =
+            "Stopped: can't see the page content. A web page is on screen, but none of its text " +
+              "reached the screen read after waiting ${PAGE_LOAD_MS / 1000} s (last read: " +
+              "${observation.read?.elements?.size ?: 0} elements, none from the page)."
+          return
+        }
+        val observeStart = SystemClock.elapsedRealtime()
+        val prompt = PromptBuilder.build(goal, stepNumber, guard.maxSteps, notes, history, observation.modelText)
         val promptTokens = ScreenSerializer.estimateTokens(PromptBuilder.SYSTEM_PROMPT + prompt)
-        val observeMs = SystemClock.elapsedRealtime() - observeStart
+        val observeMs = observation.readMs + (SystemClock.elapsedRealtime() - observeStart)
         guard.onStep()
         val step = guard.steps
         stateFlow.update { it.copy(step = step) }
 
         val reply = withTimeoutOrNull(timeout) { AgentEngine.step(model, PromptBuilder.SYSTEM_PROMPT, prompt, thinking) }
         if (reply == null) {
-          record(StepMetrics(step, "timeout", observeMs, timeout, 0, promptTokens))
+          metric(StepMetrics(step, "timeout", observeMs, timeout, 0, promptTokens))
           outcome = "Step $step took longer than ${timeout / 1000} s. Stopped."
           return
         }
@@ -164,24 +209,25 @@ object AgentRunner {
         val actStart = SystemClock.elapsedRealtime()
         when (parsed) {
           is ParsedCall.Invalid -> {
-            record(StepMetrics(step, "none", observeMs, reply.ms, 0, promptTokens))
+            metric(StepMetrics(step, "none", observeMs, reply.ms, 0, promptTokens))
             history += HistoryEntry("(no usable tool call)", parsed.reason)
             log(step, "No usable tool call: ${parsed.reason}")
             (guard.onInvalid() as? LoopGuard.Verdict.Abort)?.let {
               outcome = it.reason
               return
             }
+            observation = settle(service, observation, QUICK)
           }
           is ParsedCall.Ok -> {
             val action = parsed.action
             (guard.onAction(action.toString(), observation.key) as? LoopGuard.Verdict.Abort)?.let {
-              record(StepMetrics(step, action.tool, observeMs, reply.ms, 0, promptTokens))
+              metric(StepMetrics(step, action.tool, observeMs, reply.ms, 0, promptTokens))
               log(step, "${action.describe()}: not run, ${it.reason.replaceFirstChar(Char::lowercase)}")
               outcome = it.reason
               return
             }
             val result = execute(action, observation, service, notes, ownPackage)
-            record(StepMetrics(step, action.tool, observeMs, reply.ms, SystemClock.elapsedRealtime() - actStart, promptTokens))
+            metric(StepMetrics(step, action.tool, observeMs, reply.ms, SystemClock.elapsedRealtime() - actStart, promptTokens))
             history += HistoryEntry(action.describe(), result.forModel)
             log(step, "${action.describe()} -> ${result.forOwner}")
             if (result.finished) {
@@ -197,6 +243,7 @@ object AgentRunner {
                 return
               }
             }
+            observation = result.next ?: settle(service, observation, QUICK)
           }
         }
         samplePss()
@@ -213,24 +260,48 @@ object AgentRunner {
       withContext(NonCancellable) {
         val finalStatus = status
         val finalOutcome = outcome
-        val after = pssMb()
+        AgentEngine.endRun(model)
+        val after = MemoryProbe.read(withGraphics = true)
+        lastRunPssAfterMb = after.pssMb
         stateFlow.update {
-          val peak = maxOf(it.metrics.pssPeakMb ?: 0, it.metrics.pssBeforeMb ?: 0, after)
           it.copy(
             status = finalStatus,
             outcome = finalOutcome,
             metrics =
               it.metrics.copy(
                 totalMs = SystemClock.elapsedRealtime() - startTime,
-                pssPeakMb = peak,
-                pssAfterMb = after,
+                memoryAfter = after,
+                pssPeakMb = maxOf(it.metrics.pssPeakMb ?: 0, after.pssMb),
               ),
           )
         }
-        AgentEngine.endRun(model)
+        ModelKeeper.onRunEnded()
         // The owner waits for the answer; an owner who pressed Stop stays where they are.
         if (finalStatus != RunStatus.STOPPED) service.returnToPhoneAgent()
       }
+    }
+  }
+
+  /**
+   * Waits for the screen after an action (see [Wait]) and returns the settled read, which the
+   * next step uses as its observation.
+   */
+  private suspend fun settle(service: PhoneAgentAccessibilityService, before: AgentObservation?, wait: Wait): AgentObservation {
+    val start = SystemClock.elapsedRealtime()
+    delay(FIRST_LOOK_MS)
+    var last = service.observeForAgent()
+    var changed = !wait.expectChange || before == null || last.key != before.key
+    while (true) {
+      val elapsed = SystemClock.elapsedRealtime() - start
+      if (elapsed >= wait.maxMs) return last
+      // Nothing happened: don't wait for a page that isn't coming.
+      if (!changed && elapsed >= wait.changeWithinMs) return last
+      delay(POLL_MS)
+      val next = service.observeForAgent()
+      if (!changed && next.key != before?.key) changed = true
+      val stable = next.key == last.key
+      last = next
+      if (changed && stable && !next.view.pageWithoutContent) return next
     }
   }
 
@@ -242,10 +313,6 @@ object AgentRunner {
     ownPackage: String,
   ): Result {
     when (action) {
-      AgentAction.ReadScreen -> {
-        delay(READ_WAIT_MS)
-        return Result(true, "Waited; the screen below is new.", "waited")
-      }
       is AgentAction.Note -> {
         notes += action.text
         stateFlow.update { it.copy(notes = notes.toList()) }
@@ -256,16 +323,28 @@ object AgentRunner {
         return Result(true, "Saved for the owner.", "saved")
       }
       is AgentAction.Finish -> return Result(true, "Finished.", "finished", finished = true)
-      AgentAction.Home -> return settle(service.agentHome(), SETTLE_MS)
+      AgentAction.Home -> return done(service, observation, service.agentHome(), SMALL, "Pressed Home.")
       is AgentAction.OpenApp -> {
         refusal(ToolPolicy.check(action, observation.facts, ownPackage, null))?.let { return it }
-        return settle(service.agentOpenPrivateTab(null), LAUNCH_SETTLE_MS)
+        return done(
+          service,
+          observation,
+          service.agentOpenPrivateTab(null),
+          NAVIGATION,
+          "Opened Firefox in a new private tab; it is shown below.",
+        )
       }
       is AgentAction.OpenUrl -> {
         refusal(ToolPolicy.check(action, observation.facts, ownPackage, null))?.let { return it }
         val url = ToolPolicy.safeUrl(action.url) ?: return Result(false, "Address refused.", "refused")
         stateFlow.update { it.copy(urls = it.urls + url) }
-        return settle(service.agentOpenPrivateTab(url), LAUNCH_SETTLE_MS)
+        return done(
+          service,
+          observation,
+          service.agentOpenPrivateTab(url),
+          NAVIGATION,
+          "Opened in a new private tab. The page is shown below: read it.",
+        )
       }
       AgentAction.Back,
       is AgentAction.Scroll,
@@ -284,27 +363,58 @@ object AgentRunner {
         if (id != null && observation.read?.element(id)?.signature != element?.signature) {
           return Result(
             false,
-            "The screen changed before the action, so nothing was done. Use the ids of the current screen.",
+            "The screen changed before the action, so nothing was done. Ids change after every action: use the ids of the current screen.",
             "not done: the screen changed",
           )
         }
-        val outcome =
+        val result =
           when (action) {
-            is AgentAction.Tap -> service.agentTap(fresh, action.id)
-            is AgentAction.TypeText -> service.agentType(fresh, action.id, action.text, action.submit)
-            is AgentAction.Scroll -> service.agentScroll(fresh, action.direction == ScrollDirection.DOWN)
-            else -> service.agentBack()
+            is AgentAction.Tap -> done(service, fresh, service.agentTap(fresh, action.id), TAP, "Tapped.")
+            is AgentAction.TypeText -> {
+              val outcome = service.agentType(fresh, action.id, action.text, action.submit)
+              when {
+                outcome.ok && action.submit && outcome.detail.contains("Enter was refused") ->
+                  done(
+                    service,
+                    fresh,
+                    outcome,
+                    SMALL,
+                    "Typed the text, but Enter doesn't work in this box. Tap the search button next " +
+                      "to it, or use open_url with the search in the address.",
+                  )
+                action.submit -> done(service, fresh, outcome, NAVIGATION, "Typed and pressed Enter.")
+                else -> done(service, fresh, outcome, SMALL, "Typed.")
+              }
+            }
+            is AgentAction.Scroll -> {
+              val down = action.direction == ScrollDirection.DOWN
+              done(service, fresh, service.agentScroll(fresh, down), SMALL, if (down) "Scrolled down." else "Scrolled up.")
+            }
+            else -> done(service, fresh, service.agentBack(), TAP, "Went back.")
           }
-        val result = settle(outcome, SETTLE_MS)
         // The owner's log names the element; the model already knows which one it chose.
-        return if (element != null) Result(result.ok, result.forModel, "${element.signature}: ${result.forOwner}") else result
+        return if (element != null) {
+          Result(result.ok, result.forModel, "${element.signature}: ${result.forOwner}", next = result.next)
+        } else {
+          result
+        }
       }
     }
   }
 
-  private suspend fun settle(outcome: ActionOutcome, waitMs: Long): Result {
-    if (outcome.ok) delay(waitMs)
-    return Result(outcome.ok, if (outcome.ok) "${outcome.detail}." else "It did not work: ${outcome.detail}.", outcome.detail)
+  /** Waits for the screen after a successful action; failures come back at once. */
+  private suspend fun done(
+    service: PhoneAgentAccessibilityService,
+    before: AgentObservation,
+    outcome: ActionOutcome,
+    wait: Wait,
+    forModel: String,
+  ): Result {
+    if (!outcome.ok) return Result(false, "It did not work: ${outcome.detail}.", outcome.detail)
+    val next = settle(service, before, wait)
+    val unchanged = next.key == before.key && wait.expectChange
+    val model = if (unchanged) "$forModel The screen did not change." else forModel
+    return Result(true, model, outcome.detail + if (unchanged) " (screen unchanged)" else "", next = next)
   }
 
   private fun refusal(decision: Decision): Result? =
@@ -314,18 +424,19 @@ object AgentRunner {
     stateFlow.update { it.copy(log = it.log + LogEntry(step, text)) }
   }
 
-  private fun record(step: StepMetrics) {
+  /** Keeps what the model is about to see, and its counts, for the run log. */
+  private fun record(step: Int, observation: AgentObservation) {
+    val view = observation.view
+    val entry = StepObservation(step, view.summary(), view.classification(), view.modelText)
+    stateFlow.update { it.copy(observations = it.observations + entry, log = it.log + LogEntry(step, "screen: ${view.summary()}")) }
+  }
+
+  private fun metric(step: StepMetrics) {
     stateFlow.update { it.copy(metrics = it.metrics.copy(steps = it.metrics.steps + step)) }
   }
 
   private fun samplePss() {
-    val now = pssMb()
-    stateFlow.update {
-      val peak = maxOf(it.metrics.pssPeakMb ?: 0, it.metrics.pssBeforeMb ?: 0, now)
-      it.copy(metrics = it.metrics.copy(pssPeakMb = peak))
-    }
+    val now = MemoryProbe.read().pssMb
+    stateFlow.update { it.copy(metrics = it.metrics.copy(pssPeakMb = maxOf(it.metrics.pssPeakMb ?: 0, now))) }
   }
-
-  /** The app process's proportional set size in MB (what Android counts as its memory use). */
-  private fun pssMb(): Int = (Debug.getPss() / 1024).toInt()
 }

@@ -19,9 +19,12 @@ package com.google.ai.edge.gallery.phoneagent.os
 import android.app.Activity
 import android.os.Build
 import android.view.View
+import android.view.WindowManager
 import android.view.contentcapture.ContentCaptureManager
 import android.view.inputmethod.EditorInfo
+import androidx.activity.compose.LocalActivity
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.platform.PlatformTextInputMethodRequest
@@ -47,6 +50,10 @@ fun optOutOfOsCapture(activity: Activity) {
   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
     decor.importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS
   }
+  // Deprecated in API 37: apps targeting 37 can no longer switch content capture off this way.
+  // The view-level exclusion above stays; screens showing other apps' text add FLAG_SECURE too
+  // (BlockScreenCapture).
+  @Suppress("DEPRECATION")
   activity.getSystemService(ContentCaptureManager::class.java)?.setContentCaptureEnabled(false)
   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
     activity.setRecentsScreenshotEnabled(false)
@@ -73,3 +80,18 @@ fun NoKeyboardLearning(content: @Composable () -> Unit) {
     content = content,
   )
 }
+
+/**
+ * Marks the window secure (`FLAG_SECURE`) while this is composed and [block] is true: no
+ * screenshots, screen recording or Recents thumbnail, and the system's content capture skips the
+ * window. Used on screens that show other apps' text (Phone Agent runs, spike results).
+ */
+@Composable
+fun BlockScreenCapture(block: Boolean) {
+  val activity = LocalActivity.current ?: return
+  DisposableEffect(activity, block) {
+    if (block) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    onDispose { if (block) activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+  }
+}
+

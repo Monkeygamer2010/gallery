@@ -20,6 +20,8 @@ import android.widget.Toast
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,9 +34,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,21 +63,28 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskData
 import com.google.ai.edge.gallery.data.Model
+import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.phoneagent.a11y.PhoneAgentAccessibilityService
 import com.google.ai.edge.gallery.phoneagent.agent.AgentEngine
 import com.google.ai.edge.gallery.phoneagent.agent.AgentRunner
+import com.google.ai.edge.gallery.phoneagent.agent.AgentSettings
+import com.google.ai.edge.gallery.phoneagent.agent.AgentSettingsStore
 import com.google.ai.edge.gallery.phoneagent.agent.EngineLoad
+import com.google.ai.edge.gallery.phoneagent.agent.KeepLoaded
 import com.google.ai.edge.gallery.phoneagent.agent.LoopGuard
+import com.google.ai.edge.gallery.phoneagent.agent.MemoryProbe
+import com.google.ai.edge.gallery.phoneagent.agent.ModelKeeper
 import com.google.ai.edge.gallery.phoneagent.agent.PromptBuilder
 import com.google.ai.edge.gallery.phoneagent.agent.RunState
 import com.google.ai.edge.gallery.phoneagent.agent.RunStatus
+import com.google.ai.edge.gallery.phoneagent.os.BlockScreenCapture
 import com.google.ai.edge.gallery.phoneagent.spike.DeviceSetup
 
 /**
- * The Phone Agent screen: setup checks, the task box, Start and Stop, and the run's answer, log
- * and measurements. Everything shown stays in memory; Copy puts it on the clipboard (marked
- * sensitive) only when the owner asks.
+ * The Phone Agent screen: setup checks, the task box, Start and Stop, the run's answer, log, what
+ * the model saw and measurements, and the model-memory settings. Everything shown stays in
+ * memory; Copy puts it on the clipboard (marked sensitive) only when the owner asks.
  */
 @Composable
 fun PhoneAgentScreen(task: Task, data: CustomTaskData) {
@@ -83,32 +94,51 @@ fun PhoneAgentScreen(task: Task, data: CustomTaskData) {
   val model = uiState.selectedModel
   val initStatus by model.initStatusFlow.collectAsState()
   val modelReady = initStatus is Model.InitializationStatus.Initialized
+  val downloaded = uiState.modelDownloadStatus[model.name]?.status == ModelDownloadStatusType.SUCCEEDED
   val run by AgentRunner.state.collectAsState()
   val service by PhoneAgentAccessibilityService.instance.collectAsState()
   val load by AgentEngine.lastLoad.collectAsState()
+  val settings by AgentSettingsStore.settings.collectAsState()
   var setup by remember { mutableStateOf(DeviceSetup.read(context)) }
   var notificationsOn by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+  var memoryNow by remember { mutableStateOf("") }
   var goal by rememberSaveable { mutableStateOf("") }
   var thinking by rememberSaveable { mutableStateOf(false) }
 
   val lifecycleOwner = LocalLifecycleOwner.current
+  val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
+  val resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
   DisposableEffect(lifecycleOwner) {
+    AgentSettingsStore.load(context)
     val observer = LifecycleEventObserver { _, event ->
       if (event == Lifecycle.Event.ON_RESUME) {
         setup = DeviceSetup.read(context)
         notificationsOn = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        memoryNow = MemoryProbe.read().line()
       }
     }
     lifecycleOwner.lifecycle.addObserver(observer)
     PhoneAgentLaunch.screenShown = true
+    ModelKeeper.onScreenShown()
     onDispose {
       lifecycleOwner.lifecycle.removeObserver(observer)
       PhoneAgentLaunch.screenShown = false
+      ModelKeeper.onScreenLeft()
     }
   }
+  // Runs and results show other apps' text: no screenshots or system capture unless allowed.
+  BlockScreenCapture(!settings.allowScreenshots)
 
   // No model switching while a run uses the model.
   LaunchedEffect(run.active) { data.setAppBarControlsDisabled(run.active) }
+
+  // The model was unloaded while this screen stayed open (background, memory, idle timer): load it again.
+  LaunchedEffect(initStatus, downloaded, run.active, resumed) {
+    if (initStatus is Model.InitializationStatus.Idle && downloaded && !run.active && resumed) {
+      data.modelManagerViewModel.initializeModel(context, task = task, model = model)
+    }
+  }
+  LaunchedEffect(modelReady) { memoryNow = MemoryProbe.read().line() }
 
   val blockers = buildList {
     if (service == null) add("Turn on the PhoneAgent accessibility service.")
@@ -122,14 +152,16 @@ fun PhoneAgentScreen(task: Task, data: CustomTaskData) {
       return
     }
     val host = activity ?: return
-    val error = AgentRunner.start(host, model, text, thinking)
+    val others = uiState.tasks.flatMap { it.models }.distinct().count { it.instance != null && it !== model }
+    val error = AgentRunner.start(host, model, text, thinking, otherModelsLoaded = others)
     if (error != null) Toast.makeText(context, error, Toast.LENGTH_LONG).show()
   }
 
-  // A task typed in the Quick Settings popup starts as soon as the model is ready.
+  // A task typed in the Quick Settings popup starts once the model is ready and this screen is
+  // in front (Android only lets a visible app start the run's foreground service).
   val pending by PhoneAgentLaunch.pending.collectAsState()
-  LaunchedEffect(pending, modelReady, run.active) {
-    if (pending == null || !modelReady || run.active) return@LaunchedEffect
+  LaunchedEffect(pending, modelReady, run.active, resumed) {
+    if (pending == null || !modelReady || run.active || !resumed) return@LaunchedEffect
     val text = PhoneAgentLaunch.take() ?: return@LaunchedEffect
     goal = text
     start(text)
@@ -207,6 +239,79 @@ fun PhoneAgentScreen(task: Task, data: CustomTaskData) {
     }
 
     if (run.status != RunStatus.IDLE) RunReport(run)
+
+    ModelMemorySettings(settings, memoryNow, enabled = !run.active) { transform ->
+      AgentSettingsStore.update(context, transform)
+    }
+  }
+}
+
+/** Keep-loaded, tile model and screenshot settings, with the measured memory cost. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ModelMemorySettings(
+  settings: AgentSettings,
+  memoryNow: String,
+  enabled: Boolean,
+  update: ((AgentSettings) -> AgentSettings) -> Unit,
+) {
+  Section("Model memory") {
+    Text(
+      "Measured on your phone: Gemma 4 E4B takes about 3.2 to 3.4 GB and E2B about 2.4 to 2.6 GB on " +
+        "top of the app's 1 GB while loaded. Only one model is loaded at a time.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (memoryNow.isNotEmpty()) Text("Now: $memoryNow", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+    Text("Keep the model loaded", style = MaterialTheme.typography.labelLarge)
+    for (option in KeepLoaded.entries) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(
+          selected = settings.keepLoaded == option,
+          onClick = { update { it.copy(keepLoaded = option) } },
+          enabled = enabled,
+        )
+        Column {
+          Text(option.title, style = MaterialTheme.typography.bodyMedium)
+          Text(option.explanation, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+      }
+    }
+    if (settings.keepLoaded == KeepLoaded.MINUTES) {
+      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (minutes in AgentSettings.KEEP_MINUTES_CHOICES) {
+          FilterChip(
+            selected = settings.keepMinutes == minutes,
+            onClick = { update { it.copy(keepMinutes = minutes) } },
+            label = { Text("$minutes min") },
+            enabled = enabled,
+          )
+        }
+      }
+    }
+    Text(
+      "Android unloads it anyway when memory runs low. Nothing is loaded in advance.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text("Model for the Quick Settings tile", style = MaterialTheme.typography.labelLarge)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      for ((name, label) in listOf(DEFAULT_AGENT_MODEL to "E4B (default)", SMALL_AGENT_MODEL to "E2B (lighter)")) {
+        FilterChip(selected = settings.tileModel == name, onClick = { update { it.copy(tileModel = name) } }, label = { Text(label) })
+      }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text("Allow screenshots", style = MaterialTheme.typography.bodyMedium)
+        Text(
+          "Off: screenshots, screen recording and the system's screen capture can't see Phone Agent " +
+            "and spike screens, which show web page text.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      Switch(checked = settings.allowScreenshots, onCheckedChange = { on -> update { it.copy(allowScreenshots = on) } })
+    }
   }
 }
 
@@ -270,6 +375,25 @@ private fun RunReport(run: RunState) {
       for (url in run.urls) Text(url, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
     }
     TextButton(onClick = { DeviceSetup.copy(context, run.logText()) }) { Text("Copy run log") }
+  }
+  if (run.observations.isNotEmpty()) {
+    var show by remember(run.goal) { mutableStateOf(false) }
+    Section("What the model saw (${run.observations.size} steps)") {
+      Text(
+        "The exact screen text of each step, with how its nodes were classified. Included in Copy run log.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      TextButton(onClick = { show = !show }) { Text(if (show) "Hide" else "Show") }
+      if (show) {
+        for (o in run.observations) {
+          Text("Step ${o.step}: ${o.summary}", style = MaterialTheme.typography.labelMedium)
+          Text("nodes: ${o.classification}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+          SelectionContainer { Text(o.text, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
+          Spacer(Modifier.height(6.dp))
+        }
+      }
+    }
   }
   if (!run.active) {
     Section("Measurements") {

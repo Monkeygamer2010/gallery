@@ -414,8 +414,11 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
   private suspend fun scroll(shot: Snapshot, down: Boolean): String {
     var bestKey = -1
     var bestArea = -1L
+    var webKey = -1
     shot.root?.forEachNode { n ->
       val can = if (down) n.canScrollForward else n.canScrollBackward
+      // A web view scrolls its page by most of a screen (GeckoView: 80% of the viewport).
+      if (webKey < 0 && n.className == ScreenSerializer.WEB_VIEW_CLASS && can && !n.bounds.isEmpty) webKey = n.key
       if (n.visible && n.scrollable && can && !n.bounds.isEmpty) {
         val area = (n.bounds.right - n.bounds.left).toLong() * (n.bounds.bottom - n.bounds.top)
         if (area > bestArea) {
@@ -424,7 +427,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         }
       }
     }
-    val node = shot.nodes.getOrNull(bestKey)
+    val node = shot.nodes.getOrNull(if (webKey >= 0) webKey else bestKey)
     if (node != null) {
       val action = if (down) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
       if (node.performAction(action)) return "Scrolled with a node action"

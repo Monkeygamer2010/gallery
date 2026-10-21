@@ -28,7 +28,6 @@ import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.phoneagent.agent.AgentEngine
 import com.google.ai.edge.gallery.phoneagent.agent.AgentRunner
-import com.google.ai.edge.gallery.ui.llmchat.LlmChatModelHelper
 import com.google.ai.edge.litertlm.Contents
 import dagger.Module
 import dagger.Provides
@@ -87,7 +86,7 @@ class PhoneAgentTask(private val context: Context) : CustomTask {
     onDone: () -> Unit,
   ) {
     AgentRunner.stop("Stopped: the model was unloaded.")
-    LlmChatModelHelper.cleanUp(model = model, onDone = onDone)
+    AgentEngine.release(model = model, onDone = onDone)
   }
 
   @Composable

@@ -35,12 +35,6 @@ sealed interface AgentAction {
   /** One line for the action history the model sees and the run log the owner sees. */
   fun describe(): String
 
-  data object ReadScreen : AgentAction {
-    override val tool = "read_screen"
-
-    override fun describe() = "read_screen"
-  }
-
   data class Tap(val id: Int) : AgentAction {
     override val tool = "tap"
 
@@ -155,7 +149,8 @@ data class ToolSpec(val name: String, val description: String, val params: List<
 
 /**
  * The agent's fixed tool set (docs/DECISIONS.md, Architecture). None of these tools can change
- * policy, settings or this app; [ToolPolicy] decides what each call may do.
+ * policy, settings or this app; [ToolPolicy] decides what each call may do. There is no
+ * read_screen: every step already shows the current screen, read after the last action settled.
  */
 object AgentTools {
   const val MAX_TYPE_CHARS = 500
@@ -167,10 +162,6 @@ object AgentTools {
 
   val SPECS: List<ToolSpec> =
     listOf(
-      ToolSpec(
-        "read_screen",
-        "Wait a moment and read the screen again, for example while a page is still loading.",
-      ),
       ToolSpec(
         "tap",
         "Tap an element of the current screen.",
@@ -236,7 +227,11 @@ object AgentTools {
     val args = arguments.mapKeys { it.key.trim().lowercase() }
     fun invalid(reason: String) = ParsedCall.Invalid("$tool: $reason")
     return when (tool) {
-      "read_screen" -> ParsedCall.Ok(AgentAction.ReadScreen)
+      "read_screen", "read_page", "wait" ->
+        ParsedCall.Invalid(
+          "$tool is not a tool: the current screen is always shown below, read after the page " +
+            "finished loading. Read it and choose another tool."
+        )
       "tap" -> elementId(args["id"])?.let { ParsedCall.Ok(AgentAction.Tap(it)) } ?: invalid(ID_HELP)
       "type_text" -> {
         val id = elementId(args["id"]) ?: return invalid(ID_HELP)

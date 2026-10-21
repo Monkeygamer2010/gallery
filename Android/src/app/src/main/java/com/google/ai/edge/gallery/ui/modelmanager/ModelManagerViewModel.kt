@@ -64,6 +64,7 @@ import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.ValueType
 import com.google.ai.edge.gallery.data.createLlmChatConfigs
 import com.google.ai.edge.gallery.data.getTargetTaskIdsForImportedModel
+import com.google.ai.edge.gallery.phoneagent.agent.AgentEngine
 import com.google.ai.edge.gallery.data.markInitializationFailed
 import com.google.ai.edge.gallery.data.markInitializationStarted
 import com.google.ai.edge.gallery.data.markInitialized
@@ -775,6 +776,8 @@ constructor(
     onError: (String) -> Unit = {},
   ) {
     viewModelScope.launch {
+      // PhoneAgent fork: at most one engine; Phone Agent's is closed before another model loads.
+      AgentEngine.beforeAnyModelLoad(model)
       // Skip if initialized already.
       if (!force && model.initStatusFlow.value is Model.InitializationStatus.Initialized) {
         Log.d(TAG, "Model '${model.name}' has been initialized. Skipping.")

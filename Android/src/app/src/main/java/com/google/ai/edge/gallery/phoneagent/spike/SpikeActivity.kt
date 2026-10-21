@@ -17,9 +17,11 @@
 package com.google.ai.edge.gallery.phoneagent.spike
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.google.ai.edge.gallery.phoneagent.agent.AgentSettingsStore
 import com.google.ai.edge.gallery.phoneagent.os.NoKeyboardLearning
 import com.google.ai.edge.gallery.phoneagent.os.optOutOfOsCapture
 import com.google.ai.edge.gallery.ui.theme.GalleryTheme
@@ -33,6 +35,8 @@ class SpikeActivity : ComponentActivity() {
     // Like MainActivity: never restore saved state; this screen shows other apps' text.
     super.onCreate(null)
     optOutOfOsCapture(this)
+    // Spike results show other apps' text: no screenshots or system capture unless allowed.
+    if (!AgentSettingsStore.load(this).allowScreenshots) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     enableEdgeToEdge()
     setContent { GalleryTheme { NoKeyboardLearning { SpikeScreen(onClose = { finish() }) } } }
   }

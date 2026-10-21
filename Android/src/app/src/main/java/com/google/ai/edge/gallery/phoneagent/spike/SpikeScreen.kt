@@ -86,6 +86,7 @@ fun SpikeScreen(onClose: () -> Unit) {
   var typeText by remember { mutableStateOf("") }
   var pressEnter by remember { mutableStateOf(true) }
   var url by remember { mutableStateOf(TEST_PAGES.first().second) }
+  var exitReport by remember { mutableStateOf<String?>(null) }
 
   val lifecycleOwner = LocalLifecycleOwner.current
   DisposableEffect(lifecycleOwner) {
@@ -248,6 +249,27 @@ fun SpikeScreen(onClose: () -> Unit) {
             Text("Launch via Home + icon")
           }
         }
+      }
+
+      Section("Last exit reasons") {
+        Text(
+          "Why PhoneAgent's process ended the last few times, from Android's own record: reason, " +
+            "description, importance, memory and, for native crashes, the top frames. Kept on this " +
+            "screen only.",
+          style = MaterialTheme.typography.bodySmall,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          OutlinedButton(onClick = { exitReport = ExitReasons.report(context) }) { Text("Show last exit reasons") }
+          exitReport?.let { report ->
+            Button(onClick = {
+              DeviceSetup.copy(context, report)
+              Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+            }) {
+              Text("Copy")
+            }
+          }
+        }
+        exitReport?.let { SelectionContainer { Mono(it) } }
       }
 
       status?.let {
