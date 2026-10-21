@@ -34,8 +34,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import android.view.accessibility.AccessibilityWindowInfo
 import com.google.ai.edge.gallery.phoneagent.agent.AgentRunner
-import com.google.ai.edge.gallery.phoneagent.agent.Decision
-import com.google.ai.edge.gallery.phoneagent.agent.ScreenFacts
+import com.google.ai.edge.gallery.phoneagent.agent.ObservationBuilder
+import com.google.ai.edge.gallery.phoneagent.agent.RawScreen
 import com.google.ai.edge.gallery.phoneagent.agent.ToolPolicy
 import com.google.ai.edge.gallery.phoneagent.browser.BrowserState
 import com.google.ai.edge.gallery.phoneagent.browser.FirefoxLaunch
@@ -153,6 +153,33 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         val shot = snapshot()
         SpikeEntry(command.title, shot.outcome(), shot.summary, null)
       }
+      SpikeCommand.AgentObservation -> {
+        val obs = observeForAgent()
+        val view = obs.view
+        val read = view.read
+        val outcome =
+          when {
+            read == null -> "Not read: ${view.refusal}"
+            !view.pageArea -> "No web page on screen (${read.elements.size} elements, about ${read.estimatedTokens} tokens)"
+            view.pageWithoutContent -> "PROBLEM: a web page is on screen but none of its text is in the observation"
+            else ->
+              "Page content: yes (${read.pageLines} lines from the page of ${read.elements.size} elements, " +
+                "about ${read.estimatedTokens} tokens)"
+          }
+        val summary =
+          ReadSummary(
+            compact = view.modelText,
+            details = view.classification(),
+            stats =
+              "Elements: ${read?.elements?.size ?: 0}, from the page: ${view.pageLines}\n" +
+                "Tokens (estimate): ${read?.estimatedTokens ?: 0}\n" +
+                "Read time: ${obs.readMs} ms",
+            browser = view.browser?.let { describe(it) },
+            signatures = read?.elements?.associate { it.id to it.signature }.orEmpty(),
+            diagnostics = listOfNotNull(view.converter, read?.diagnostics?.report()).joinToString("\n"),
+          )
+        SpikeEntry(command.title, outcome, summary, null)
+      }
       is SpikeCommand.Tap -> act(command, command.id, command.expected) { shot, element -> tap(shot, element) }
       is SpikeCommand.Type ->
         act(command, command.id, command.expected) { shot, element ->
@@ -237,18 +264,10 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
   private suspend fun snapshot(): Snapshot =
     withContext(Dispatchers.Default) {
       val start = SystemClock.elapsedRealtime()
-      val allWindows = runCatching { windows }.getOrDefault(emptyList())
-      val keyboardOpen = allWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-      val appWindows = allWindows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-      val window =
-        appWindows.firstOrNull { it.isActive } ?: appWindows.firstOrNull { it.isFocused } ?: appWindows.firstOrNull()
-      val rootNode = window?.root ?: rootInActiveWindow
+      val front = frontWindow()
+      val rootNode = front.root
       val pkg = rootNode?.packageName?.toString()
-      val rect = Rect()
-      window?.getBoundsInScreen(rect)
-      val screen =
-        if (rect.isEmpty) Bounds(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-        else Bounds(rect.left, rect.top, rect.right, rect.bottom)
+      val screen = front.screen
       val ownApp = pkg == packageName
       val tree = if (rootNode != null && !ownApp) NodeConverter.convert(rootNode) else null
       val browser = if (tree != null && FirefoxReader.isFirefox(pkg)) FirefoxReader.read(tree.root, screen) else null
@@ -258,14 +277,15 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
           packageName = pkg,
           url = browser?.url,
           privateTab = browser?.isPrivate,
-          keyboardOpen = keyboardOpen,
+          keyboardOpen = front.keyboardOpen,
         )
       val read = ScreenSerializer.read(tree?.root, screen, context)
       val uncapped = ScreenSerializer.read(tree?.root, screen, context, tokenBudget = Int.MAX_VALUE)
       val elapsed = SystemClock.elapsedRealtime() - start
       val stats =
         "Nodes read: ${tree?.nodes?.size ?: 0}${if (tree?.truncated == true) " (stopped at the limit)" else ""}\n" +
-          "Elements: ${read.elements.size} shown of ${read.totalElements}\n" +
+          "Elements: ${read.elements.size} shown of ${read.totalElements}" +
+          (if (read.pageArea) " (${read.pageLines} from the web page)" else "") + "\n" +
           "Tokens (estimate): ${read.estimatedTokens} shown, ${uncapped.estimatedTokens} for the whole viewport\n" +
           "Read time: $elapsed ms"
       val details =
@@ -287,6 +307,8 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
             stats = stats,
             browser = browser?.let { describe(it) },
             signatures = read.elements.associate { it.id to it.signature },
+            diagnostics =
+              listOfNotNull(tree?.summary(), read.diagnostics.report()).joinToString("\n"),
           ),
       )
     }
@@ -294,6 +316,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
   private fun describe(state: BrowserState): String =
     "Address: ${state.url ?: "not found"}${state.urlSource?.let { " (from $it)" } ?: ""}\n" +
       "Private tab: ${if (state.isPrivate) "yes" else "no evidence"}\n" +
+      "Shows: ${if (state.webContent) "a web page" else if (state.homepage) "Firefox's home page" else "Firefox's own screen"}\n" +
       if (state.privateEvidence.isEmpty()) "Evidence: none" else "Evidence:\n" + state.privateEvidence.joinToString("\n") { "- $it" }
 
   private fun appLabel(pkg: String): String =
@@ -506,48 +529,49 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
   /**
    * Looks at the app in front for the agent loop. Apps other than Firefox are not converted at all
    * (only their package and name are known); a Firefox tab is serialized only when Firefox's own
-   * UI shows private mode ([ToolPolicy.readDecision]).
+   * UI shows private mode ([ObservationBuilder]). Web-page parts more than a screen away are not
+   * converted.
    */
   suspend fun observeForAgent(): AgentObservation =
     withContext(Dispatchers.Default) {
       val start = SystemClock.elapsedRealtime()
-      val allWindows = runCatching { windows }.getOrDefault(emptyList())
-      val keyboardOpen = allWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-      val appWindows = allWindows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-      val window =
-        appWindows.firstOrNull { it.isActive } ?: appWindows.firstOrNull { it.isFocused } ?: appWindows.firstOrNull()
-      val rootNode = window?.root ?: rootInActiveWindow
-      val pkg = rootNode?.packageName?.toString()
-      val label = pkg?.let { appLabel(it) }
-      fun refused(facts: ScreenFacts, reason: String) =
-        AgentObservation(facts, null, reason, null, SystemClock.elapsedRealtime() - start, null)
-      if (rootNode == null || !FirefoxReader.isFirefox(pkg)) {
-        val facts = ScreenFacts(pkg, label)
-        val reason = (ToolPolicy.readDecision(facts, packageName) as? Decision.Refuse)?.reason ?: "Not read."
-        return@withContext refused(facts, reason)
-      }
-      val rect = Rect()
-      window?.getBoundsInScreen(rect)
-      val screen =
-        if (rect.isEmpty) Bounds(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-        else Bounds(rect.left, rect.top, rect.right, rect.bottom)
-      val tree = NodeConverter.convert(rootNode)
-      val browser = FirefoxReader.read(tree.root, screen)
-      val facts =
-        ScreenFacts(pkg, label, privateTab = browser.isPrivate, browserOwnScreen = !browser.webContent && !browser.homepage)
-      val decision = ToolPolicy.readDecision(facts, packageName)
-      if (decision is Decision.Refuse) return@withContext refused(facts, decision.reason)
-      val context = ScreenContext(label, pkg, browser.url, privateTab = true, keyboardOpen = keyboardOpen)
-      val read = ScreenSerializer.read(tree.root, screen, context)
-      AgentObservation(
-        facts = facts,
-        read = read,
-        refusal = null,
-        url = browser.url,
-        readMs = SystemClock.elapsedRealtime() - start,
-        snapshot = Snapshot(pkg, screen, tree.nodes, tree.root, read, summary = null),
-      )
+      val front = frontWindow()
+      val pkg = front.root?.packageName?.toString()
+      val convert = front.root != null && FirefoxReader.isFirefox(pkg) && pkg != packageName
+      val tree = if (convert) NodeConverter.convert(front.root!!, screen = front.screen) else null
+      val raw =
+        RawScreen(
+          packageName = pkg,
+          appLabel = pkg?.let { appLabel(it) },
+          root = tree?.root,
+          screen = front.screen,
+          keyboardOpen = front.keyboardOpen,
+          converter = tree?.summary(),
+        )
+      val view = ObservationBuilder.build(raw, packageName)
+      val read = view.read
+      val shot =
+        if (read != null && tree != null) Snapshot(pkg, front.screen, tree.nodes, tree.root, read, summary = null) else null
+      AgentObservation(view, SystemClock.elapsedRealtime() - start, shot)
     }
+
+  private class FrontWindow(val root: AccessibilityNodeInfo?, val screen: Bounds, val keyboardOpen: Boolean)
+
+  /** The active application window (never an overlay, the keyboard or system UI panels). */
+  private fun frontWindow(): FrontWindow {
+    val allWindows = runCatching { windows }.getOrDefault(emptyList())
+    val keyboardOpen = allWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+    val appWindows = allWindows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+    val window =
+      appWindows.firstOrNull { it.isActive } ?: appWindows.firstOrNull { it.isFocused } ?: appWindows.firstOrNull()
+    val rootNode = window?.root ?: rootInActiveWindow
+    val rect = Rect()
+    window?.getBoundsInScreen(rect)
+    val screen =
+      if (rect.isEmpty) Bounds(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+      else Bounds(rect.left, rect.top, rect.right, rect.bottom)
+    return FrontWindow(rootNode, screen, keyboardOpen)
+  }
 
   /** Taps element [id] of [observation], which the runner has just taken and checked. */
   suspend fun agentTap(observation: AgentObservation, id: Int): ActionOutcome {

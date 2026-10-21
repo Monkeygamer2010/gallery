@@ -24,6 +24,12 @@ data class Bounds(val left: Int, val top: Int, val right: Int, val bottom: Int) 
   fun intersects(other: Bounds): Boolean =
     left < other.right && other.left < right && top < other.bottom && other.top < bottom
 
+  /** The overlap with [other] (empty when they don't overlap). */
+  fun intersect(other: Bounds): Bounds =
+    Bounds(maxOf(left, other.left), maxOf(top, other.top), minOf(right, other.right), minOf(bottom, other.bottom))
+
+  override fun toString(): String = "[$left,$top][$right,$bottom]"
+
   val centerX: Int
     get() = (left + right) / 2
 
@@ -56,7 +62,14 @@ data class UiNode(
   val enabled: Boolean = true,
   val password: Boolean = false,
   val heading: Boolean = false,
+  /**
+   * `isVisibleToUser`. Reliable for native views; web engines may report it from their own
+   * caches (GeckoView marks page nodes "offscreen" from a lazily built viewport cache), so the
+   * serializer judges page nodes by their bounds instead.
+   */
   val visible: Boolean = true,
+  /** `isImportantForAccessibility`, kept for diagnostics only. */
+  val important: Boolean = true,
   /** The app marked this node's data as sensitive (Android 14+ `isAccessibilityDataSensitive`). */
   val sensitive: Boolean = false,
   val scrollable: Boolean = false,

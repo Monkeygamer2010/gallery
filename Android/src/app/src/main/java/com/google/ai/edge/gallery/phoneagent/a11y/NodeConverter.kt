@@ -22,44 +22,47 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import com.google.ai.edge.gallery.phoneagent.screen.Bounds
+import com.google.ai.edge.gallery.phoneagent.screen.NodeAccess
+import com.google.ai.edge.gallery.phoneagent.screen.TreeCopier
 import com.google.ai.edge.gallery.phoneagent.screen.UiNode
 
-/** A converted tree plus the live nodes, indexed by [UiNode.key], for acting on elements. */
-class ConvertedTree(val root: UiNode, val nodes: List<AccessibilityNodeInfo>, val truncated: Boolean)
-
 /**
- * Copies an accessibility tree into [UiNode]s. Keys are assigned in pre-order, matching the
- * serializer's reading order. Stops after [maxNodes] nodes or [maxDepth] levels, so a huge page
- * cannot stall the service.
+ * A converted tree plus the live nodes, indexed by [UiNode.key], for acting on elements.
+ * [prunedPageSubtrees] counts web-page parts skipped because they lay more than a screen away.
  */
+class ConvertedTree(
+  val root: UiNode,
+  val nodes: List<AccessibilityNodeInfo>,
+  val truncated: Boolean,
+  val prunedPageSubtrees: Int = 0,
+) {
+  /** One line for diagnostics. */
+  fun summary(): String =
+    "Converted ${nodes.size} nodes" + (if (truncated) " (stopped at the limit)" else "") +
+      if (prunedPageSubtrees > 0) ", skipped $prunedPageSubtrees page parts more than a screen away" else ""
+}
+
+/** Copies an accessibility tree into [UiNode]s ([TreeCopier] does the walking). */
 object NodeConverter {
-  const val MAX_NODES = 2500
+  const val MAX_NODES = 5000
   const val MAX_DEPTH = 80
 
-  fun convert(root: AccessibilityNodeInfo, maxNodes: Int = MAX_NODES, maxDepth: Int = MAX_DEPTH): ConvertedTree {
-    val nodes = mutableListOf<AccessibilityNodeInfo>()
-    var truncated = false
-    val rect = Rect()
-
-    fun copy(node: AccessibilityNodeInfo, depth: Int): UiNode {
-      val key = nodes.size
-      nodes += node
+  private object Access : NodeAccess<AccessibilityNodeInfo> {
+    override fun bounds(node: AccessibilityNodeInfo): Bounds {
+      val rect = Rect()
       node.getBoundsInScreen(rect)
+      return Bounds(rect.left, rect.top, rect.right, rect.bottom)
+    }
+
+    override fun className(node: AccessibilityNodeInfo): String? = node.className?.toString()
+
+    override fun childCount(node: AccessibilityNodeInfo): Int = node.childCount
+
+    override fun child(node: AccessibilityNodeInfo, index: Int): AccessibilityNodeInfo? = node.getChild(index)
+
+    @Suppress("DEPRECATION")
+    override fun toUiNode(node: AccessibilityNodeInfo, key: Int, bounds: Bounds, children: List<UiNode>): UiNode {
       val actions = node.actionList
-      val children = mutableListOf<UiNode>()
-      if (depth < maxDepth) {
-        for (i in 0 until node.childCount) {
-          if (nodes.size >= maxNodes) {
-            truncated = true
-            break
-          }
-          val child = node.getChild(i) ?: continue
-          children += copy(child, depth + 1)
-        }
-      } else if (node.childCount > 0) {
-        truncated = true
-      }
-      @Suppress("DEPRECATION")
       return UiNode(
         key = key,
         className = node.className?.toString(),
@@ -80,24 +83,31 @@ object NodeConverter {
         password = node.isPassword,
         heading = node.isHeading,
         visible = node.isVisibleToUser,
+        important = node.isImportantForAccessibility,
         sensitive = Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive,
         scrollable = node.isScrollable,
         canScrollForward =
           actions.any {
-            it.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ||
-              it.id == AccessibilityAction.ACTION_SCROLL_DOWN.id
+            it.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD || it.id == AccessibilityAction.ACTION_SCROLL_DOWN.id
           },
         canScrollBackward =
           actions.any {
-            it.id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD ||
-              it.id == AccessibilityAction.ACTION_SCROLL_UP.id
+            it.id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD || it.id == AccessibilityAction.ACTION_SCROLL_UP.id
           },
-        bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom),
+        bounds = bounds,
         children = children,
       )
     }
+  }
 
-    val tree = copy(root, 0)
-    return ConvertedTree(tree, nodes, truncated)
+  /** With [screen], web-page parts more than a screen height away are skipped (agent reads). */
+  fun convert(
+    root: AccessibilityNodeInfo,
+    maxNodes: Int = MAX_NODES,
+    maxDepth: Int = MAX_DEPTH,
+    screen: Bounds? = null,
+  ): ConvertedTree {
+    val copied = TreeCopier.copy(root, Access, maxNodes, maxDepth, screen)
+    return ConvertedTree(copied.root, copied.nodes, copied.truncated, copied.prunedPageSubtrees)
   }
 }

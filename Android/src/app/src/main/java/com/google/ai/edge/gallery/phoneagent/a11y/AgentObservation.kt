@@ -16,43 +16,39 @@
 
 package com.google.ai.edge.gallery.phoneagent.a11y
 
+import com.google.ai.edge.gallery.phoneagent.agent.Observation
+import com.google.ai.edge.gallery.phoneagent.agent.ObservationBuilder
 import com.google.ai.edge.gallery.phoneagent.agent.ScreenFacts
 import com.google.ai.edge.gallery.phoneagent.screen.ScreenRead
-import com.google.ai.edge.gallery.phoneagent.screen.ScreenStatus
 
 /**
- * One look at the screen for the agent loop. Apps other than Firefox are never converted or
- * serialized: for them only the package and app name are known. A Firefox tab is serialized only
- * when its own UI shows private mode.
+ * One look at the screen for the agent loop: the [view] built by [ObservationBuilder] plus the
+ * live nodes needed to act on it. Apps other than Firefox are never converted; a Firefox tab is
+ * serialized only when its own UI shows private mode.
  */
 class AgentObservation
 internal constructor(
-  val facts: ScreenFacts,
-  /** The compact screen read, or null when the policy refused to read this screen. */
-  val read: ScreenRead?,
-  /** Why the screen was not read (PhoneAgent's own words, no screen text). */
-  val refusal: String?,
-  /** The address in Firefox's toolbar, when read. */
-  val url: String?,
+  val view: Observation,
   val readMs: Long,
   internal val snapshot: PhoneAgentAccessibilityService.Snapshot?,
 ) {
-  /** What the model sees between the screen delimiters. */
+  val facts: ScreenFacts
+    get() = view.facts
+
+  val read: ScreenRead?
+    get() = view.read
+
+  val refusal: String?
+    get() = view.refusal
+
   val modelText: String
-    get() =
-      read?.text
-        ?: buildString {
-          facts.appLabel?.let { append("App: ").append(it).append('\n') }
-          append("(Not read: ").append(refusal ?: "unknown").append(')')
-        }
+    get() = view.modelText
 
-  /** An empty, secure or protected window: the run must stop (no workaround). */
   val empty: Boolean
-    get() = read?.status == ScreenStatus.EMPTY
+    get() = view.empty
 
-  /** Identifies what the model saw, for the loop guard. */
   val key: String
-    get() = modelText
+    get() = view.key
 }
 
 /** How an action went. [detail] is PhoneAgent's own description, never screen text. */

@@ -25,6 +25,9 @@ import kotlinx.coroutines.flow.update
 sealed class SpikeCommand(val title: String) {
   data object Inspect : SpikeCommand("Inspect the screen")
 
+  /** The exact Phase 2 agent observation of the app in front. */
+  data object AgentObservation : SpikeCommand("Show agent observation")
+
   /** [expected] is the element's role and label from the last inspection, to catch a changed screen. */
   data class Tap(val id: Int, val expected: String?) : SpikeCommand("Tap [$id]")
 
@@ -55,6 +58,8 @@ data class ReadSummary(
   val browser: String?,
   /** Element role and label by id, to check a later tap or type still targets the same element. */
   val signatures: Map<Int, String>,
+  /** How nodes were classified: counts per drop reason and raw properties of dropped nodes. */
+  val diagnostics: String = "",
 )
 
 data class SpikeEntry(

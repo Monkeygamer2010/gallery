@@ -185,14 +185,17 @@ class ScreenSerializerTest {
       node {
         listOf(
           node(text = "  two\n\nlines \"quoted\"  "),
-          node(text = "y".repeat(300)),
+          node(text = "y".repeat(600)),
+          node(text = "z".repeat(300), clickable = true),
         )
       }
     }
     val result = read(root)
     assertEquals("[1] text \"two lines 'quoted'\"", result.elements[0].line())
-    assertEquals(ScreenSerializer.MAX_LABEL_CHARS, result.elements[1].label.length)
+    // Text lines keep up to 400 characters (answers sit deep in paragraphs); element labels 100.
+    assertEquals(ScreenSerializer.MAX_TEXT_CHARS, result.elements[1].label.length)
     assertTrue(result.elements[1].label.endsWith("…"))
+    assertEquals(ScreenSerializer.MAX_LABEL_CHARS, result.elements[2].label.length)
   }
 
   @Test

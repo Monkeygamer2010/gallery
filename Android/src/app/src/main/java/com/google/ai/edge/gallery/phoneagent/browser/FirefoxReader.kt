@@ -94,6 +94,18 @@ object FirefoxReader {
     return withScheme
   }
 
+  /**
+   * The address at the start of a browser UI text such as "en.wikipedia.org/wiki/X. Search or
+   * enter address", or null when the text doesn't start with one.
+   */
+  internal fun leadingUrl(text: String?): String? {
+    val first = text?.trim()?.substringBefore(' ')?.trimEnd('.', ',', ';', ':') ?: return null
+    if (first.length < 4 || !URL_LIKE.matches(first)) return null
+    // The top-level domain has letters ("2.5" or "1.0.3" is not an address).
+    val host = first.substringAfter("://").substringBefore('/').substringBefore(':')
+    return first.takeIf { host.substringAfterLast('.').any(Char::isLetter) }
+  }
+
   /** "https://en.wikipedia.org/wiki/X" or "en.wikipedia.org/wiki/X" -> "en.wikipedia.org". */
   fun domainOf(url: String): String? {
     val withScheme = if ("://" in url) url else "https://$url"
@@ -107,6 +119,8 @@ object FirefoxReader {
     val evidence = mutableListOf<String>()
     var fallbackUrl: String? = null
     var fallbackSource: String? = null
+    var toolbarUrl: String? = null
+    var toolbarSource: String? = null
     var webContent = false
     var homepage = false
 
@@ -124,6 +138,15 @@ object FirefoxReader {
       if (url == null && idName != null && idName in URL_VIEW_IDS && text != null) {
         url = text
         urlSource = "view id $idName"
+      }
+      // Firefox's Compose toolbar shows the address and the hint as one text, for example
+      // "en.wikipedia.org/wiki/Munich. Search or enter address".
+      if (toolbarUrl == null && !node.editable && !node.password) {
+        val leading = leadingUrl(text) ?: leadingUrl(desc)
+        if (leading != null) {
+          toolbarUrl = leading
+          toolbarSource = "toolbar text in ${idName ?: node.className?.substringAfterLast('.') ?: "a node"}"
+        }
       }
       if (fallbackUrl == null && text != null && !node.password && URL_LIKE.matches(text) &&
         (idName?.contains("url") == true || idName?.contains("toolbar") == true || node.editable)) {
@@ -143,8 +166,8 @@ object FirefoxReader {
     }
     visit(root)
     if (url == null) {
-      url = fallbackUrl
-      urlSource = fallbackSource
+      url = toolbarUrl ?: fallbackUrl
+      urlSource = if (toolbarUrl != null) toolbarSource else fallbackSource
     }
     return BrowserState(url, urlSource, evidence.distinct().take(10), webContent, homepage)
   }

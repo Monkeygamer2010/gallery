@@ -166,7 +166,17 @@ fun SpikeScreen(onClose: () -> Unit) {
             "another app within the 5 s if needed.",
           style = MaterialTheme.typography.bodySmall,
         )
-        Button(onClick = { start(SpikeCommand.Inspect) }, enabled = status == null) { Text("Inspect in 5 s") }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          Button(onClick = { start(SpikeCommand.Inspect) }, enabled = status == null) { Text("Inspect in 5 s") }
+          OutlinedButton(onClick = { start(SpikeCommand.AgentObservation) }, enabled = status == null) {
+            Text("Show agent observation")
+          }
+        }
+        Text(
+          "\"Show agent observation\" builds exactly what Phone Agent's model would see now, with the " +
+            "same rules (Firefox private tabs only), and says whether any page text is in it.",
+          style = MaterialTheme.typography.bodySmall,
+        )
       }
 
       Section("Act on the app in front (after 5 s)") {
@@ -281,7 +291,10 @@ private fun ReadBlock(title: String, read: ReadSummary, showDetails: Boolean) {
   Mono(read.stats)
   read.browser?.let { Mono(it) }
   SelectionContainer { Mono(read.compact) }
-  if (showDetails) SelectionContainer { Mono(read.details) }
+  if (showDetails) {
+    if (read.diagnostics.isNotEmpty()) SelectionContainer { Mono(read.diagnostics) }
+    SelectionContainer { Mono(read.details) }
+  }
 }
 
 @Composable
@@ -316,7 +329,10 @@ private fun copyEntry(context: Context, entry: SpikeEntry, withDetails: Boolean)
       append("\n== ").append(name).append(" ==\n").append(read.stats).append('\n')
       read.browser?.let { append(it).append('\n') }
       append(read.compact).append('\n')
-      if (withDetails) append("\n-- details --\n").append(read.details)
+      if (withDetails) {
+        if (read.diagnostics.isNotEmpty()) append("\n-- diagnostics --\n").append(read.diagnostics).append('\n')
+        append("\n-- details --\n").append(read.details)
+      }
     }
   }
   DeviceSetup.copy(context, text)

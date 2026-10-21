@@ -147,4 +147,33 @@ class FirefoxReaderTest {
     assertFalse(settings.homepage)
     assertTrue(settings.isPrivate) // the word alone; the policy still refuses this screen
   }
+
+  @Test
+  fun readsTheAddressFromFirefox158sComposeToolbarText() {
+    val root =
+      n(
+        0,
+        children =
+          listOf(
+            n(1, desc = "Site information"),
+            n(2, text = "en.wikipedia.org/wiki/University_of_Bologna. Search or enter address"),
+            n(3, desc = "Private Tabs Open: 5. Tap to switch tabs.", viewId = "TabCounterTestTags.tabCounter"),
+          ),
+      )
+    val state = FirefoxReader.read(root, SCREEN)
+    assertEquals("en.wikipedia.org/wiki/University_of_Bologna", state.url)
+    assertEquals("en.wikipedia.org", state.domain)
+    assertTrue(state.isPrivate)
+  }
+
+  @Test
+  fun leadingUrlIgnoresTextThatIsNotAnAddress() {
+    assertEquals("duckduckgo.com/?q=munich", FirefoxReader.leadingUrl("duckduckgo.com/?q=munich. Search or enter address"))
+    assertEquals("https://example.org/a", FirefoxReader.leadingUrl("https://example.org/a"))
+    assertNull(FirefoxReader.leadingUrl("Private Tabs Open: 5. Tap to switch tabs."))
+    assertNull(FirefoxReader.leadingUrl("2.5 MB downloaded"))
+    assertNull(FirefoxReader.leadingUrl("1.0.3"))
+    assertNull(FirefoxReader.leadingUrl("Search or enter address"))
+    assertNull(FirefoxReader.leadingUrl(null))
+  }
 }
