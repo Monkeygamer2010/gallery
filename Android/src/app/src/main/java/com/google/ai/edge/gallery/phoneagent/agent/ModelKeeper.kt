@@ -92,7 +92,8 @@ object ModelKeeper {
     screenShown = false
     if (running()) return
     when (settings().keepLoaded) {
-      KeepLoaded.OFF -> unload()
+      // A screen that comes straight back (rotation, font size) keeps the model.
+      KeepLoaded.OFF -> unload(unlessScreenBack = true)
       KeepLoaded.WHILE_OPEN -> {}
       KeepLoaded.MINUTES -> startTimer()
     }
@@ -137,12 +138,18 @@ object ModelKeeper {
     timer = null
   }
 
-  private fun unload() {
+  private fun unload(unlessScreenBack: Boolean = false) {
     if (running()) return
     cancelTimer()
     // Closing an engine can wait for a load in progress: never on the main thread.
-    scope.launch { if (!running()) AgentEngine.releaseAll() }
+    scope.launch {
+      if (unlessScreenBack) delay(SCREEN_BACK_GRACE_MS)
+      if (!running() && !(unlessScreenBack && screenShown)) AgentEngine.releaseAll()
+    }
   }
+
+  /** How long a closed Phone Agent screen has to come back before "Off" unloads the model. */
+  private const val SCREEN_BACK_GRACE_MS = 1_500L
 
   private fun running(): Boolean = AgentRunner.state.value.active
 
