@@ -100,14 +100,15 @@ it by editing this file.
 
 - `CustomTask` in `phoneagent/task` (all fork code lives under `phoneagent/`), modelled on
   mobileactions; Hilt `@Provides @IntoSet`; `keepModelAlive = true`.
-- ToolSet (12 or fewer): `read_screen`, `tap(id)`, `type_text(id,text)`, `scroll(dir)`, `back`,
-  `home`, `open_app(name)`, `open_url(url)`, `note(text)`, `save_result(title,text)`,
-  `finish(summary)`. Later: compose-only intent tools (message, email, dial, alarm) that prefill
+- ToolSet (12 or fewer): `tap(id)`, `type_text(id,text)`, `scroll(dir)`, `back`, `home`,
+  `open_app(name)`, `open_url(url)`, `note(text)`, `save_result(title,text)`, `finish(summary)`.
+  (`read_screen` was dropped in Phase 2.1: every step already shows the screen, read after the
+  last action settled.) Later: compose-only intent tools (message, email, dial, alarm) that prefill
   and never send without confirmation, reusing `IntentHandler`.
 - Tool calls run with LiteRT-LM `automaticToolCalling = false`, so our code executes (and
   policy-checks) every call.
 - AccessibilityService: node actions first, `ACTION_SET_TEXT` with paste fallback,
-  `dispatchGesture` last. `read_screen` returns a compact numbered list `[id] role "label"
+  `dispatchGesture` last. Each step's screen read is a compact numbered list `[id] role "label"
   state`: visible nodes only, our overlay excluded, about 800 tokens max, deduped, truncated,
   plus URL/domain in a browser. Empty or secure windows: say so and stop; never bypass.
 - Browser backend interface. Primary: drive Firefox via accessibility in a private tab. Try (a)
@@ -311,4 +312,37 @@ Assumptions (change any by editing here):
 - Imported `.litertlm` models are offered in the task with a warning.
 - Phone Agent appears after upstream's tasks on the home screen (upstream's ordering list is not
   edited, to keep the diff small).
+
+## Phase 2.1 (assumptions; change any by editing here)
+
+- Web page nodes (inside a web view) count as on screen when their bounds overlap the visible part
+  of the web view; their own "visible to user" flag is ignored (GeckoView sets it from Gecko's
+  lazily built viewport cache). Native views keep the flag. Page nodes off screen or without
+  bounds give no line, but their children are still checked.
+- Text lines keep up to 400 characters; element labels (buttons, links, inputs) up to 100.
+- Agent reads copy at most 5000 nodes and skip page parts more than one screen height away.
+- No `read_screen` tool. After an action the runner waits for the screen to change (2.5 s for a
+  tap, 4 s for navigation, 1.5 s for small actions), then for two identical reads with any web
+  page's text present, at most 10 s after navigation or a tap and 3 s after small actions. That
+  read is the next observation.
+- A web page with no text in the read after the wait stops the run ("can't see the page content").
+- Scroll uses the web view's own scroll action first (GeckoView: about 80% of the visible
+  height), then the largest scrollable node, then a swipe.
+- The run log keeps each step's observation text, counts and node classification (memory only,
+  Copy run log).
+- Firefox's address is also read from the start of its Compose toolbar text.
+- Private tabs: each `open_url` still opens a new private tab. Reusing or closing the agent's tab
+  would mean operating Firefox's own UI (the address bar or the tab tray), which the policy
+  forbids, and Firefox has no public intent for it. Close them with Firefox's "Close private tabs"
+  notification.
+- One Phone Agent engine at a time, owned outside the activity; a different model or accelerator
+  closes the old engine first, and any other task loading a model closes Phone Agent's first.
+- "Keep the model loaded" defaults to Off; the other choices are "while PhoneAgent is open" and
+  5/15/30 minutes after the last use. Android's low-memory and background-trim signals unload it
+  whenever no task runs (with the minutes setting, a background trim unloads only when memory is
+  actually low). No preloading in this pass.
+- The tile's model is a setting (E4B by default, E2B possible).
+- `FLAG_SECURE` on the Phone Agent, spike and popup screens unless "Allow screenshots" is on (default
+  off). Other screens keep the view-level content-capture exclusion only.
+- targetSdk stays 37. `ACCESS_LOCAL_NETWORK` is not requested (no local MCP server is set up).
 

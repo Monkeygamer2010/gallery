@@ -327,7 +327,7 @@ the Phase 0.1 questions are recorded in `docs/DECISIONS.md`.
 
 On-device numbers (node count, read time, token estimate per page) come from your results.
 
-### On-device checklist (Galaxy S25+, One UI 8.5)
+### On-device checklist (Galaxy S25+, One UI 9 / Android 17)
 
 Install the CI build (`PhoneAgent-ci.apk` from the `phoneagent-ci` pre-release; it installs as
 a separate app next to older debug builds). Only public test pages are used, all in a Firefox
@@ -425,7 +425,7 @@ Wait for your Phase 1 results. If the spike passes: Phase 2 (task, E4B, core too
 foreground service, Quick Settings tile, read-only web tasks). If Firefox can't be driven
 reliably (for example private tabs can't be opened or detected), we discuss Phase 5's fallback.
 
-### Results (owner, 2026-10-20: Galaxy S25+, One UI 8.5, Firefox 158.0)
+### Results (owner, 2026-10-20: Galaxy S25+, One UI 9 / Android 17, Firefox 158.0)
 
 Accepted. Parts A to F passed. Part G: PCAPdroid (all apps, about 4 minutes covering startup and
 the Firefox tests) showed zero PhoneAgent connections; the 15-minute idle check moves to the
@@ -510,7 +510,7 @@ the spike tools.
 
 Success rate, step latency, load time and memory come from your runs (part C).
 
-### On-device checklist (Galaxy S25+, One UI 8.5)
+### On-device checklist (Galaxy S25+, One UI 9 / Android 17)
 
 Install the new CI build over the old one (settings, the downloaded model and the accessibility
 switch are kept). Close Firefox's private tabs from earlier tests (Firefox's notification
@@ -603,4 +603,203 @@ None. Phase 2 assumptions are in `docs/DECISIONS.md` under Phase 2.
 Wait for your Phase 2 results. If at least 3 of 5 tasks succeed: Phase 3 (forms and extraction,
 confirmations, new-domain gate, Results screen, injection hardening). If fewer succeed, I'll
 tune from your run logs first (prompt, sampling, constrained decoding) before Phase 3.
+
+### Results (owner, 2026-10-21: Galaxy S25+, One UI 9 / Android 17, Firefox 158.0)
+
+Not accepted: 0 of 5 scripted tasks succeeded (E4B, GPU). Every run stopped after 3 to 5 steps
+(12 to 20 s) with "the same action on the same screen again". No run read a page, scrolled or
+called finish, although the pages loaded in Firefox. Inspect on a loaded Wikipedia article read
+601 nodes but showed only the 6 toolbar buttons. Phase 2.1 below has the cause and the fixes.
+
+What worked, and the numbers:
+
+| | E4B GPU | E4B CPU | E2B GPU | E2B CPU |
+|---|---|---|---|---|
+| Cold load | 9227 ms (8969 ms from the tile) | 6490 ms | 7260 ms | 5208 ms |
+| Model time per step (median) | 1.4 to 1.7 s (max 2.5 s) | 18.5 s | 733 ms (max 1459 ms) | 6.4 s |
+| Whole step (median) | 3.4 to 3.6 s | about 18.6 s | 2.6 s | 7.8 s |
+| PSS with the model loaded | 4.2 to 4.4 GB | 3.8 GB | 3.4 to 3.6 GB | 3.4 GB |
+
+- Speculative decoding was on. Tool calls parsed with valid ids at every step. Thinking on: model
+  time per step median 7.8 s (max 30.2 s) without helping, since the pages were still unread.
+- The app alone takes about 1 GB. Before the tile run and the thinking run PSS was 6.4 to 6.6 GB
+  and the phone's wallpaper and icons disappeared (memory pressure): two engines were loaded
+  after switching between models and accelerators.
+- Rules: the Messages task finished with "I cannot open the Messages app because only Firefox can
+  be opened" and nothing was read. The Android Settings task touched nothing in Settings, but the
+  model then searched DuckDuckGo and reused a stale id before the loop guard stopped it.
+- The top bar stayed clear on every cold launch.
+- Not tested yet: E1, E2, E5, E6, G3, G4, F2 to F4 and the 15-minute idle check.
+
+## Phase 2.1: why pages were unreadable, and the fixes (2026-10-21)
+
+Goal: diagnose and fix the Phase 2 failure before Phase 3, as the owner asked, plus the memory
+and Android 17 questions from the same message. Your phone runs One UI 9 / Android 17 (earlier
+entries said One UI 8.5); the menu paths in the checklists are the ones you followed, so they
+stay.
+
+### The cause
+
+1. **My Phase 1 converter bug (the main cause).** The code that copies the accessibility tree
+   read each node's bounds into one shared rectangle and built the node only after visiting its
+   children, so every container got the bounds of its last descendant. For a web page that is
+   the footer, far below the screen: the page's root was judged off screen and skipped with
+   everything in it. The same wrong bounds made Firefox's page view look like one of Firefox's
+   own screens, so the agent got "Firefox's own menus and settings are off limits" instead of the
+   page, which is why the prompts got smaller after a page loaded (480 to 417 tokens). The
+   converter is Android code and had no unit test; Phase 1's reading check should have caught it
+   and I should have tested the converter then. It is now pure code (`TreeCopier`) with tests.
+2. **GeckoView's "visible to user" flag.** Reading GeckoView's source: a page node is flagged
+   visible only when Gecko's cached viewport state says it is on screen. That cache is built
+   lazily, and Gecko marks everything offscreen when it thinks the tab is inactive. Page nodes
+   are now judged by their bounds against the visible part of the web view; native views keep
+   the flag. Visible-only, the 800-token cap and password redaction are unchanged.
+3. **Text lines were cut at 100 characters.** Wikipedia puts "1088" about 150 characters into
+   the University of Bologna's lead, so task 2 would have failed even with the page read. Text
+   lines now keep up to 400 characters (element labels stay at 100).
+4. **The loop.** `read_screen` only waited a fixed 2 s and the observation didn't change, so the
+   model repeated it and the loop guard stopped the run. There is no `read_screen` now: after
+   every action the runner waits until the screen changed and held still for two reads and, on a
+   web page, shows page text (up to 10 s), and that read is the next observation.
+
+### Review of the rest of the loop (item 9)
+
+Other places where the observation could go empty or a refusal could stay invisible, all fixed:
+- refusals of the whole screen (not private, Firefox's own screens) weren't in the run log: each
+  step now logs what the model saw, its element count and how the nodes were classified;
+- Firefox 158's Compose toolbar shows the address and hint as one text, so the address was "not
+  found": it is read from the start of that text;
+- the node cap (2500) could leave the on-screen part of a long article unread after scrolling: the
+  cap is 5000 and page parts more than a screen away aren't copied;
+- scroll looked for the largest node flagged scrollable (wrong bounds, and GeckoView's page view
+  may not flag itself): it now uses the web view's own scroll action first;
+- GeckoView has no "press Enter" accessibility action, so `submit` can't work in a page's search
+  box: the result tells the model to tap the search button, and the prompt prefers `open_url`;
+- a web page that still shows no text after the wait now stops the run with "can't see the page
+  content" and the element count, instead of looping;
+- the run could crash when Android refused to start the foreground service from the background
+  (possible when a popup task started while PhoneAgent wasn't in front): it now reports it, and a
+  popup task starts only once the Phone Agent screen is in front.
+
+### Memory and the tile (items 12 to 14)
+
+- **Leak found:** the model manager releases nothing when its activity finishes, and Phone Agent
+  keeps its model loaded on purpose. After the main screen was closed (for example Back from the
+  home screen) the engine stayed in memory, and the next launch (the tile) loaded a second one.
+  Switching models or accelerators inside the task released the old engine, but not always
+  before the new one started loading.
+- **Fix:** Phone Agent's engine is owned outside the activity. A screen or a new model manager
+  asking for the loaded model gets it instead of loading another; a different model or
+  accelerator closes the old engine first; any other task loading a model closes Phone Agent's
+  first (one line in the model manager). Each step's conversation is closed.
+- **Keep the model loaded** (Phone Agent screen > Model memory): Off (default: unload when you
+  leave Phone Agent or it goes to the background), While PhoneAgent is open, or 5/15/30 minutes
+  after the last use. Android's low-memory signal unloads it whenever no task runs, and so does
+  a background trim (with the minutes setting, only when memory is actually low). The tile's
+  model can be E4B or E2B.
+- **Not done in this pass:** preloading when the Quick Settings panel opens. Loading 2.5 to 3.5 GB
+  in the background each time the panel opens is the riskiest part under Android 17's memory
+  limits; I'd like the exit reasons and the anonymous/file-backed split first. It fits a later
+  memory pass (before Phase 4's cross-app work).
+- **Measurements** now show PSS split into anonymous, file-backed, shared, swap and graphics,
+  engines loaded, other models loaded, and PSS after the previous run.
+- **Spike tools > Last exit reasons** shows Android's record of why the process ended
+  (`ApplicationExitInfo`): reason, description, importance, PSS/RSS, time, an explicit note for
+  Android 17's per-app memory limit ("MemoryLimiter:AnonSwap") and the top frames of a native
+  crash.
+
+### Android 17 (item 15)
+
+- (a) Per-app memory limits: see above.
+- (b) targetSdk is 37, and API 37 deprecates `ContentCaptureManager.setContentCaptureEnabled`, so
+  the app-wide switch from Phase 0.1 can no longer be relied on. The view-level exclusion stays.
+  Phone Agent, spike and popup screens now also set `FLAG_SECURE` (no screenshots, screen
+  recording or system content capture) unless you turn on "Allow screenshots".
+- (c) Background activity launches: the tile already uses `startActivityAndCollapse` with a
+  `PendingIntent` (SystemUI sends it), notification actions are your taps, the popup opens
+  PhoneAgent from the foreground, and the accessibility service's launches worked on your phone.
+  No `IntentSender` is used. Nothing to change.
+- (d) `ACCESS_LOCAL_NETWORK` exists in API 37. It matters only for an MCP server on your local
+  network; none is configured, and cleartext HTTP is off app-wide anyway. Not added.
+
+### Android concepts in this phase
+
+- **Virtual views.** A web engine draws the page itself, so it describes the page to accessibility
+  services as "virtual" nodes it creates on request (`AccessibilityNodeProvider`). Their flags and
+  bounds are whatever the engine computes; GeckoView's visibility flag comes from Gecko's own
+  viewport cache.
+- **ApplicationExitInfo.** Android keeps a short record of why each of an app's processes ended
+  (crash, native crash, not responding, low memory, user force-stop, system kills) that the app
+  can read later.
+- **PSS split.** Anonymous memory has no file behind it (heaps, buffers); it counts against
+  Android 17's per-app limit and goes to swap. File-backed pages (a memory-mapped model file) can
+  be dropped and read again.
+- **onTrimMemory.** Since Android 14 an app is told only that its UI was hidden or that it went to
+  the background; there is no gradual "running low" signal any more.
+- **FLAG_SECURE.** Marks a window secure: screenshots and recordings show it black, Recents
+  shows no thumbnail, and the system's content capture skips it.
+
+### Measurements (cloud VM)
+
+| | Phase 2 | Phase 2.1 |
+|---|---|---|
+| `ci` APK size | 226.8 MB | 227.0 MB |
+| Unit tests | 69 | 96 (page reading 10, observation builder 9, Firefox reader +2, exit reasons 3, memory 2, prompt +1) |
+| New permissions | `FOREGROUND_SERVICE_SPECIAL_USE` | none |
+| Code (lines added) | about 3,160 | about 2,470 |
+
+### On-device checklist (Galaxy S25+, One UI 9 / Android 17)
+
+Install the new CI build. Close Firefox's private tabs from earlier runs.
+
+**A. Verify the fix in under a minute**
+1. Firefox: open `https://en.wikipedia.org/wiki/University_of_Bologna` in a private tab.
+2. PhoneAgent > Settings > Open spike tools > **Show agent observation**, switch to Firefox within
+   5 s. Expect "Page content: yes (N lines from the page ...)" and, in the text, the article's
+   heading and lead with "1088". If it says "PROBLEM", tap **Copy with details** and send it.
+3. Scroll the article by hand, repeat: different paragraphs, header "Scroll: more below, more
+   above".
+
+**B. The 5 scripted tasks (acceptance: at least 3 succeed)**
+
+E4B, GPU, thinking off. For each task: type it exactly, tap **Start**, don't touch the phone
+until PhoneAgent comes back with the answer. A task succeeds when the run says **Finished** and
+the answer contains the expected fact. For each, send: succeeded yes/no and **Copy
+measurements**; for failures also **Copy run log** (it now includes what the model saw at each
+step; public pages only).
+
+1. `Search DuckDuckGo for the height of the Eiffel Tower and tell me the height in metres.`
+   Expected: about 330 m.
+2. `On English Wikipedia, find the year the University of Bologna was founded.`
+   Expected: 1088.
+3. `Look up Munich on Wikipedia and summarize in two sentences what the city is known for.`
+   Expected: a correct two-sentence summary (capital of Bavaria, Oktoberfest, BMW...).
+4. `Use DuckDuckGo to find who wrote the novel The Name of the Rose and the year it was first published.`
+   Expected: Umberto Eco, 1980.
+5. `Open https://en.wikipedia.org/wiki/Python_(programming_language) and tell me who created Python and the year of its first release.`
+   Expected: Guido van Rossum, 1991.
+
+**C. Memory**
+1. Model memory: leave "Keep the model loaded" on Off. Run task 2 twice in a row; send both
+   **Copy measurements** (PSS before/peak/after, anonymous and file-backed, engines loaded,
+   "after the previous run").
+2. Leave Phone Agent (Back to the home list) and open it again: it shows "Loading the model..."
+   because Off unloads the model when you leave.
+3. Spike tools > **Last exit reasons** > Copy, once now (to catch the earlier tile crash) and after
+   any crash.
+4. Tile with E2B: Model memory > tile model E2B, then the tile > task 2.
+
+**D. Screenshots**: a screenshot of the Phone Agent screen is black; turn on "Allow screenshots"
+when you want to send me one.
+
+### Open questions
+
+1. `FLAG_SECURE` is on by default for Phone Agent, spike and popup screens. Keep that default?
+   Should it cover the whole app (AI Chat and the rest show model output and typed prompts too)?
+2. Preloading from the Quick Settings panel: still wanted after you've seen the memory split?
+
+### Next step
+
+Wait for your results. If at least 3 of 5 tasks succeed: Phase 3. If not, the run logs now show
+exactly what the model saw at each step.
 

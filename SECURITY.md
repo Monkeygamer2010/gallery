@@ -50,7 +50,10 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[done]** Removed upstream's FCM handler, which let any app make PhoneAgent open an arbitrary
   URL through a `deeplink` intent extra, and the debug logging of every intent extra.
 - **[done]** The app opts out of content capture, autofill and Recents screenshots, and asks
-  keyboards not to learn typed text.
+  keyboards not to learn typed text. API 37 deprecates the app-wide content-capture switch, so
+  screens that show other apps' text (Phone Agent runs and results, spike tools, the task popup)
+  are also marked secure (`FLAG_SECURE`: no screenshots, recordings or system capture) unless
+  the owner turns on "Allow screenshots".
 - **[done]** CI uses first-party GitHub actions pinned to commit SHAs, read-only permissions
   except the publish job, and signing secrets that are decoded to a temp file and deleted. Release
   keys never go to GitHub; the owner signs releases locally.
@@ -61,8 +64,8 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[done, interim]** In the existing tiles, calendar, contacts, messaging and network-capable
   tool calls ask for confirmation every time, and an Agent Chat intent runs only while an enabled
   skill offers it. Phase 4's policy engine replaces this.
-- **[done]** The model gets a small fixed tool set (read_screen, tap, type_text, scroll, back,
-  home, open_app, open_url, note, save_result, finish). No tool can change policy, the allowlist,
+- **[done]** The model gets a small fixed tool set (tap, type_text, scroll, back, home,
+  open_app, open_url, note, save_result, finish). No tool can change policy, the allowlist,
   locks or settings of this app.
 - **[done]** Tool calls are executed by our code (LiteRT-LM manual tool calling), which validates
   every call before it touches the phone.
