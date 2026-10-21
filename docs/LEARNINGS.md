@@ -654,9 +654,10 @@ stay.
    lazily, and Gecko marks everything offscreen when it thinks the tab is inactive. Page nodes
    are now judged by their bounds against the visible part of the web view; native views keep
    the flag. Visible-only, the 800-token cap and password redaction are unchanged.
-3. **Text lines were cut at 100 characters.** Wikipedia puts "1088" about 150 characters into
-   the University of Bologna's lead, so task 2 would have failed even with the page read. Text
-   lines now keep up to 400 characters (element labels stay at 100).
+3. **Text lines were cut at 100 characters.** A web engine splits a paragraph's text at its links,
+   so many runs are short, but a run without links is often longer and an answer past its first
+   100 characters was lost. Text lines now keep up to 400 characters (element labels stay at
+   100). A precaution: I can't show it would have broken one of the five tasks.
 4. **The loop.** `read_screen` only waited a fixed 2 s and the observation didn't change, so the
    model repeated it and the loop guard stopped the run. There is no `read_screen` now: after
    every action the runner waits until the screen changed and held still for two reads and, on a
@@ -791,6 +792,84 @@ step; public pages only).
 
 **D. Screenshots**: a screenshot of the Phone Agent screen is black; turn on "Allow screenshots"
 when you want to send me one.
+
+### Tests for the checklist's rule checks (E3 to E6)
+
+Before this pass, the policy decisions behind E3 (other apps), E4 (Android Settings) and E5
+(Firefox's own settings and menus) had unit tests, but nothing tested the whole path from a
+screen's tree to what the model sees, and E6 (lock screen) had no test. `ObservationBuilderTest`
+now covers all four end to end and checks that no screen text reaches the model: Messages
+(Google and Samsung), Gmail and the launcher; Settings, One UI's accessibility pages and the
+permission dialog; Firefox's settings in private mode; System UI (the lock screen) and no window
+at all; plus a normal Firefox tab and PhoneAgent itself.
+
+### Answers to the owner's questions
+
+**a. The 800-token cap and scrolling.** The read walks the tree in reading order (for a page,
+top to bottom) and keeps only what is on screen. Each kept node becomes one line until the next
+line would pass about 775 tokens (800 minus a reserve); the rest get no id, and the read ends
+with "(N more elements not shown. Scroll to see more.)". Because only the visible part is read,
+the cap rarely bites: a phone screen of article text is roughly 150 to 400 tokens; a page full
+of links can reach it. Parts more than a screen away are not even copied. Scrolling moves the
+page; the next step's read lists what is then on screen, and the header says "Scroll: more
+below / more above" from page content below or above the visible area.
+
+**b. Scrolling on Firefox pages.** Before this pass the service took the largest node flagged
+scrollable (with the wrong bounds), and GeckoView's page view may not flag itself, so it most
+likely fell back to a swipe from 70% to 30% of the screen height. Now it uses the web view's own
+scroll action first (GeckoView scrolls by 80% of the visible height), then the largest scrollable
+node, then the swipe. Phase 1's D3 scrolled a real DuckDuckGo results page and passed, so
+scrolling itself worked, but with the bounds bug the reads could not contain page text, so Phase
+1 never verified that a scroll brings new page text into the read. `PageReadingTest` covers it
+in code; checklist step A3 covers it on the phone.
+
+**c. Is each answer on the first screen?** My expectation for mobile pages, not verified here:
+1. Eiffel Tower height (DuckDuckGo): likely yes, in an answer box or the first result's snippet.
+2. University of Bologna (Wikipedia): yes, in the lead paragraph, which mobile Wikipedia shows
+   before the infobox.
+3. Munich summary (Wikipedia): yes, the lead paragraph is enough.
+4. The Name of the Rose (DuckDuckGo): likely yes, in the Wikipedia result's snippet ("the 1980
+   debut novel by Italian author Umberto Eco").
+5. Python (Wikipedia): probably not. The first paragraph doesn't name the creator; "Guido van
+   Rossum ... 1991" comes later in the lead, and the infobox ("Designed by", "First appeared")
+   follows the first paragraph, so one scroll is likely needed.
+
+**d. Phase 3.** Forms and extraction:
+- code-level confirmation dialogs (domain and exact text) before anything is sent, posted or
+  submitted, and before purchases, deletions, installs and permission or settings changes;
+- the new-domain gate: typing or submitting on a site not yet visited in the run asks first;
+- a Results screen (copy, share, save as a file through the system picker) and the last 10 runs
+  in app-private storage with Clear;
+- injection hardening with hostile test pages;
+- form tasks on public test pages in the checklist.
+
+Rough size: 2,000 to 2,500 lines with tests, about like this pass (2,470) and smaller than
+Phase 2 (3,160). Your on-device part will take longer, because of the form tests and dialogs.
+
+**e. Memory.**
+- **Footprint.** The model files are 3.66 GB (E4B) and 2.59 GB (E2B). Your measurements put the
+  model's share at 3.2 to 3.4 GB for E4B on GPU (2.8 GB on CPU) and 2.4 to 2.6 GB for E2B. That
+  is about the file size, as expected: the weights stay resident, and the text-only load skips
+  only the vision and audio parts. E2B is 0.8 to 1 GB lighter.
+- **Keeping E2B loaded on 12 GB.** Probably yes:
+  - about 3.5 GB for PhoneAgent with E2B;
+  - 0.5 to 1.5 GB for Firefox;
+  - 3 to 4 GB for Android, System UI and the launcher.
+
+  E4B alone is likely fine too; two engines (6.4 to 6.6 GB) were not. Under Android 17 the
+  deciding number is the anonymous part, which counts against the per-app limit; file-backed
+  model pages can be dropped and read again. The new measurements show that split.
+- **The tile under one engine at a time.** If the tile's model is already loaded (Keep loaded
+  on, recently used), the task starts at once. If another model is loaded, it is closed first
+  and the tile's model loads cold (about 5 to 9 s). With Keep loaded off (the default), every
+  tile use loads cold.
+- **Your earlier crash.** I can't tell from here whether it was the memory limiter. Last exit
+  reasons shows Android's record:
+  - "MemoryLimiter" means Android 17's per-app limit;
+  - "low memory" means the system's low-memory killer;
+  - a crash may be the foreground-service start failure fixed in this pass.
+
+  The evidence (6.6 GB with two engines, wallpaper gone) points to a memory kill.
 
 ### Open questions
 
