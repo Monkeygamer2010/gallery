@@ -882,3 +882,228 @@ Phase 2 (3,160). Your on-device part will take longer, because of the form tests
 Wait for your results. If at least 3 of 5 tasks succeed: Phase 3. If not, the run logs now show
 exactly what the model saw at each step.
 
+### Results (owner's retest: Galaxy S25+, One UI 9 / Android 17, Firefox 158.0)
+
+- **A (page reading):** passed. The Bologna article read as 94 elements (88 from the page), about
+  750 tokens, with "1088"; scrolled to the infobox, 68 elements (61 from the page), about 530
+  tokens. Last exit reasons listed; no MemoryLimiter.
+- **B (5 tasks):** 1 of 5. Task 4 finished, but its answer ("Umberto Eco") was on no screen: it
+  came from the model's memory.
+  1. Two taps were refused because the screen changed (the page was still loading); the answer
+     was on screen at [98]; the model then tapped a non-existent [1000].
+  2. `open_url` left a blank private tab; the model repeated its first action.
+  3. The model scrolled, tapped "mw-content-text" (a container named by its DOM id) and the loop
+     guard stopped it.
+  4. The model tapped the search engine selector; the answer came from memory (above).
+  5. `open_url` left a blank tab again; the model recovered by typing into the address bar, then
+     answered "19191" for 1991.
+- **Measurements:** cold load 7.6 to 8.4 s; model time per step 2.4 to 3.0 s with prompts of 650
+  to 1,500 tokens; one engine; PSS flat across runs.
+- **Other checks:** the model unloads on leaving (Off); the Stop chip and the notification's Stop
+  work; locking the phone didn't stop a run; the tile ran E4B although the tile model was E2B (and
+  failed after tapping Clear).
+- **Your answers:** keep `FLAG_SECURE` on by default for the Phone Agent, spike and popup screens
+  only (the rest of the app as upstream has it), keep "Allow screenshots"; no Quick Settings
+  preloading yet.
+
+## Phase 2.2: open_url, waits, a compact observation and checked answers (2026-11-07)
+
+Goal: fix what the Phase 2.1 retest showed, without starting Phase 3, and report on upstream
+without merging.
+
+### What changed
+
+1. **open_url loads the page.** It sent Firefox's `OPEN_PRIVATE_TAB` action with the address,
+   from the accessibility service. That action is the launcher's "New private tab" shortcut:
+   Firefox 158 hands it to `NewTabShortcutIntentProcessor`, which opens the home page in private
+   mode with the address bar focused and ignores the address. Android 17's background-launch rules
+   were not involved: a bound accessibility service may start activities, and Firefox did come to
+   the front with the new tab. `open_url` now sends `ACTION_VIEW` with the address and the extra
+   `private_browsing_mode=true` to `IntentReceiverActivity`, which Firefox gives to its private tab
+   processor. If Firefox still shows a blank private tab, the address (checked again) is typed
+   into the focused address bar with Enter. The runner waits up to 10 s for a web page with text;
+   if none comes, the result says so instead of passing the blank tab off as the page. Spike:
+   **Test open_url** shows the verdict, the address, private yes/no, page lines, the tab count
+   before and after, and the time.
+2. **Waiting.** A settled screen now also needs the node count unchanged for 1 s (a results page
+   kept adding nodes after two equal reads). When the element an action names has changed by the
+   time it runs, the observation is rebuilt and the model asked again; that is not a step and the
+   loop guard isn't touched (at most twice in a row).
+3. **A compact observation.** Text lines have no ids; a paragraph's fragments and links are one
+   line with the links numbered inline (`in [3]Bologna, [4]Italy.`); controls named only by a DOM
+   id, clickable containers and citation links aren't elements; navigation and banner landmarks
+   are skipped except search fields, search buttons and tabs; fundraising, cookie and donation
+   notices are dropped; neighbouring lines with the same label become one; the main content comes
+   first and Firefox's toolbar last. Visible-only, the cap, password redaction and the delimiting
+   are unchanged. On reconstructions of your logged screens (`PageFixtures`; estimated tokens,
+   lines):
+
+   | Screen | Before | After |
+   |---|---|---|
+   | DuckDuckGo results | 593 (55 lines) | 423 (25) |
+   | Wikipedia article top | 471 (56) | 291 (23) |
+   | Article top under the fundraising banner | 580 (63) | 228 (12) |
+   | Article scrolled to the infobox | 481 (65) | 290 (46) |
+
+   The reconstructions are smaller than your real screens (about 750 and 530 tokens); real pages
+   split text into more fragments, so they should shrink at least as much. The spike's new **Copy
+   tree** exports a real screen's tree so the next fixtures can be recorded ones.
+4. **Finishing.** `finish` takes an evidence quote. The quote must be on a screen of this run and
+   every number (and every multi-word name) in the answer must be in it; the first finish that
+   fails is rejected with the reason and the run goes on, a second one is accepted and marked
+   "Evidence: NOT verified". When the loop guard or the step limit ends a run that saw page text, a
+   last call that offers only `finish` answers from the newest page screens or says the answer
+   wasn't found, checked the same way. Before each tool call the model writes one line on whether
+   the screen answers the task (LiteRT-LM keeps text written before a tool call); thinking stays
+   off.
+5. **Prompt.** A new private tab has the address bar focused; searches and addresses go there with
+   `submit`; on a results page the model doesn't search again but takes the result ("Wikipedia",
+   "Continued in Wikipedia"); never the search engine selector or Clear. Searching through an
+   `open_url` search address is out for now.
+6. **Tile.** The navigation hook stepped aside whenever a Phone Agent screen was showing, so the
+   open screen (E4B, chosen earlier in the app bar) took the tile's task with its own model. Now the
+   request carries the tile model; the hook opens that model's screen, replacing a Phone Agent
+   screen with another model, and a screen takes the task only if it was meant for its model.
+   Other loaded models are closed before Phone Agent loads one. The run log's first line names the
+   model the tile asked for and the one running.
+7. **Lock.** The run stops as soon as the screen turns off (a screen-off receiver registered for
+   the run) or the keyguard shows (checked before every step and action, and during waits), with
+   "Stopped: the phone was locked."; every agent action refuses while locked. The Stop chip's
+   window keeps the screen on during a run, so the screen timeout doesn't count as a lock. No new
+   permissions.
+8. **CI.** Pushes that change only `docs/` or Markdown outside `Android/src` skip the build;
+   everything else builds, including the workflow and the privacy checks.
+
+Also fixed on the way:
+- An address typed into Firefox's address bar is now held to `open_url`'s rule in code (public
+  `https://` only, typed in that form); search words go through as they are. Before, only the
+  `open_url` tool was checked, and this pass sends searches through the address bar.
+- A clickable container with a single long text child was labelled with its first 100 characters
+  and the rest of the text dropped; long text is measured uncut now.
+
+### Answers to the status questions
+
+**a. What open_url sent and why Firefox didn't load it:** item 1 above.
+
+**b. The tile and the lock:** items 6 and 7 above.
+
+**c. Tokens per screen:** the table in item 3.
+
+**d. Will model time per step drop as prompts shrink?** Somewhat, not much. Each step starts a
+fresh conversation, so the system prompt and the tool declarations (about 1,100 to 1,400 tokens
+by my estimate) are prefilled every step, plus the step's own prompt; then the reply is decoded. Compaction removes
+about 170 to 350 prompt tokens per page screen. Prefill on the phone's GPU is fast per token, so I
+expect a saving of a few tenths of a second per step, and the new one-line check adds about 10 to
+20 decoded tokens, which costs about as much. The larger lever is LiteRT-LM 0.19's
+`Conversation.clone()`: prefill the fixed part once per run and clone it for each step (see the
+upstream report). Please compare "Model time per step" in **Copy measurements** with Phase 2.1's
+2.4 to 3.0 s.
+
+**e. Size:** about 3,000 lines added (1,680 app code, 1,310 tests and fixtures) against 2,480 for
+Phase 2.1 (1,775 and 705): app code slightly smaller, the rest is tests.
+
+### Upstream report (read-only; nothing merged)
+
+- **Versions.** Our base is upstream `8f5f2a0` (2026-10-13), which contains release tag 1.0.20
+  (2026-10-06); `versionName` is 1.0.20. 1.0.19 (2026-09-02), `LlmSessionManager` and the Hugging
+  Face model-details call with file sizes were already in it. Upstream has since tagged 1.0.21 and
+  1.0.22 (the same commit, 2026-10-28) and 1.0.23 (2026-11-04). `main` is 116 commits ahead of our
+  base (104 to 1.0.23): 329 files, about +80,600/-3,300 lines, mostly new features: an XR language
+  teacher (36,000 lines), text-to-speech and speech recognition (12,000), audio and per-task model
+  settings in the model manager (9,500), and reworked downloads (2,000: resume, reconnecting slow
+  connections, zip extraction).
+- **Files both sides changed: 28.** The hard ones: `ModelManagerViewModel` (upstream +1,151/-470),
+  `DownloadWorker` and `DownloadRepository` (rewritten upstream; our download rules must be applied
+  again), `DownloadAndTryButton`, `HoldToDictateViewModel` (moved to `asr/` upstream; ours is the
+  offline-only dictation change), `AICoreModelHelper` (we removed it; upstream changed it),
+  `Analytics.kt` (our stub against upstream's new `GalleryAnalytics`), the manifest, the build
+  files, `GalleryNavGraph` and `SettingsDialog`.
+- **Dependencies.** Five new ML Kit GenAI artifacts (speech recognition, text-to-speech, schema,
+  common, schema compiler): the guard fails on `com.google.mlkit`, so the features using them must
+  be excluded as AICore was. MediaPipe tasks-audio 1.2.0 is new and tasks-vision and
+  tasks-retrieval go to 1.2.0: the guard allows MediaPipe, and its transitive check (which blocks
+  `datatransport`) applies. Also new: `androidx.xr.projected` (alpha) and `androidx.pdf`.
+  LiteRT-LM 0.18.0 to 0.18.1.
+- **Telemetry.** Upstream wraps Firebase in a new `GalleryAnalytics` and logs new events (model
+  download start, success and failure with the model id and duration; speech events). Our no-op
+  stub needs the new API; until it has it the merge doesn't compile, so nothing can be sent
+  quietly.
+- **Network.** No new host is contacted on its own. New code opens connections only in downloads
+  (started by you), the Hugging Face client (a refactor; NETWORK.md row 3 covers the model-details
+  call) and the import dialog (row 3). New links you can tap: Play Store pages for AICore and
+  Speech Services, developers.google.com and a testers group. Upstream now limits the Hugging Face
+  token to Hugging Face URLs too.
+- **Permissions.** No new `uses-permission`; new `<queries>` for text-to-speech engines,
+  `com.google.android.tts` and `com.google.android.glasses.core`; a non-exported XR activity. The
+  APK check would flag permissions that new libraries merge in.
+- **LiteRT-LM.** Ours 0.18.0, upstream's 0.18.1, newest 0.19.1 (2026-11-05). 0.19.0 adds
+  `Conversation.clone()` and `Session.clone()` (they copy the history and the KV cache) and
+  per-session speculative decoding settings; otherwise the Kotlin API we use is unchanged, so the
+  runtime alone can be bumped: one version line, the license list, the APK check and a phone run.
+- **Recommendation: merge** the 1.0.23 tag, as its own phase after this pass passes and before
+  Phase 3. Not a rebase: our branch is published and is never force-pushed. Not cherry-picking:
+  the 116 commits are mostly features, and picking would make every later sync harder. Not
+  skipping: the gap only grows. The work: resolve the 28 files in favor of the privacy contract;
+  exclude the ML Kit speech features and AICore; decide on the XR teacher; re-run the guard, the
+  APK check and Phase 0's network checks; then a short regression on the phone. Rough size: one to
+  two days of my work, and on your side about Phase 0.1's checklist. Bump LiteRT-LM to 0.19.1
+  separately.
+
+### Android concepts in this phase
+
+- **Intent processors:** Firefox reads an incoming intent with a chain of processors; the action
+  and extras decide which one handles it, so the same activity can ignore an address (the
+  new-tab shortcut) or open it (a VIEW intent).
+- **Screen off and keyguard:** `ACTION_SCREEN_OFF` reaches only receivers registered at runtime;
+  `PowerManager.isInteractive` and `KeyguardManager.isKeyguardLocked` tell the two states apart.
+- **Keeping the screen on:** a visible window with `FLAG_KEEP_SCREEN_ON` holds the screen on
+  without the wake-lock permission.
+- **Navigation:** `popUpTo(...) { inclusive = true }` replaces the screen in front instead of
+  stacking a second one.
+
+### Measurements (cloud VM)
+
+| | Phase 2.1 | Phase 2.2 |
+|---|---|---|
+| `ci` APK size | 227.0 MB | 227.0 MB |
+| Unit tests | 96 | 144 (waits 6, open_url 6, evidence 12, compaction 10, tree export 2, tile 3, address bar 2, prompt +3, others +4) |
+| New permissions | none | none |
+| Code (lines added) | about 2,480 | about 3,000 (1,680 app code, 1,310 tests and fixtures) |
+
+### Retest list (Galaxy S25+, One UI 9 / Android 17)
+
+Install the new CI build. In Firefox, set the default search engine to DuckDuckGo (tasks 1 and 4
+name it, and searches now go through the address bar), and close old private tabs.
+
+1. **open_url:** spike tools > Firefox > **Test open_url** with the prefilled Wikipedia address.
+   Expect "PAGE LOADED ... private: yes; page text: N lines; tabs: a -> b". If it says NO PAGE,
+   send the line.
+2. **Observation:** in Firefox, search `University of Bologna founded`, then spike tools > **Show
+   agent observation**: snippets as single lines with numbered links inline, no All/Images/News
+   links. Then the Bologna article (with the fundraising banner if it shows): no banner lines, the
+   lead as one line with "1088". For both, **Copy tree** and send it (public pages).
+3. **Tile model:** Model memory > tile model E2B. Open Phone Agent with E4B, use the tile with
+   task 2: the screen switches to E2B, and the run log starts "Started from the Quick Settings
+   tile, which asked for Gemma-4-E2B; running Gemma-4-E2B." Once more from cold (force stop
+   first).
+4. **Lock:** start task 3 and press the power button after the first step: "Stopped: the phone
+   was locked.", and nothing happens after you unlock. In other runs the screen stays on.
+5. **The five tasks** (E4B, GPU, thinking off). A task passes only if it finishes, the answer has
+   the expected fact and the evidence quote is on a logged screen ("Evidence: verified (on the
+   screen of step N)"). Send **Copy measurements** for each and **Copy run log** for failures.
+   1. Eiffel Tower height (DuckDuckGo): about 330 m.
+   2. University of Bologna founded (Wikipedia): 1088.
+   3. Munich in two sentences: capital of Bavaria, Oktoberfest, BMW...
+   4. The Name of the Rose: Umberto Eco, 1980.
+   5. Python's creator and first release: Guido van Rossum, 1991.
+
+### Open questions
+
+1. LiteRT-LM 0.19.1 (for `Conversation.clone()`): bump the runtime alone now, with the upstream
+   merge, or not yet? `CLAUDE.md` keeps the pinned version unless you decide otherwise.
+2. The merge: the 1.0.23 tag as recommended, taking `versionName` 1.0.23?
+
+### Next step
+
+Wait for your retest. If it passes: the upstream merge as its own phase, then Phase 3.
+

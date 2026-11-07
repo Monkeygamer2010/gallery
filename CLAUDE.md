@@ -45,4 +45,5 @@ building more than one variant, and `./gradlew --stop` before switching worktree
 ## CI
 - `.github/workflows/build-apk.yml`: on push to `claude/phone-agent**`, runs the guard, unit
   tests and `assembleCi`, then publishes the APK to the rolling pre-release `phoneagent-ci`.
+  Pushes that change only `docs/` or Markdown outside `Android/src` skip it.
 - Signing secrets (owner adds later): KEYSTORE_B64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.

@@ -108,9 +108,11 @@ it by editing this file.
 - Tool calls run with LiteRT-LM `automaticToolCalling = false`, so our code executes (and
   policy-checks) every call.
 - AccessibilityService: node actions first, `ACTION_SET_TEXT` with paste fallback,
-  `dispatchGesture` last. Each step's screen read is a compact numbered list `[id] role "label"
-  state`: visible nodes only, our overlay excluded, about 800 tokens max, deduped, truncated,
-  plus URL/domain in a browser. Empty or secure windows: say so and stop; never bypass.
+  `dispatchGesture` last. Each step's screen read is a compact list: links and controls are
+  numbered `[id] role "label" state`, text is plain (a paragraph is one line, its links numbered
+  inline), visible nodes only, our overlay excluded, about 800 tokens max, deduped, truncated,
+  plus URL/domain in a browser (details: Phase 2.2). Empty or secure windows: say so and stop;
+  never bypass.
 - Browser backend interface. Primary: drive Firefox via accessibility in a private tab. Try (a)
   ACTION_VIEW with "open links in a private tab", (b) `org.mozilla.fenix.OPEN_PRIVATE_TAB` to
   IntentReceiverActivity, (c) driving the UI. Verify Firefox is the default browser; refuse to
@@ -331,10 +333,11 @@ Assumptions (change any by editing here):
 - The run log keeps each step's observation text, counts and node classification (memory only,
   Copy run log).
 - Firefox's address is also read from the start of its Compose toolbar text.
-- Private tabs: each `open_url` still opens a new private tab. Reusing or closing the agent's tab
-  would mean operating Firefox's own UI (the address bar or the tab tray), which the policy
-  forbids, and Firefox has no public intent for it. Close them with Firefox's "Close private tabs"
-  notification.
+- Private tabs: each `open_url` still opens a new private tab. Closing the agent's tabs would mean
+  operating Firefox's tab tray, one of Firefox's own screens, which the policy forbids, and Firefox
+  has no public intent for it. Close them with Firefox's "Close private tabs" notification. (Phase
+  2.2: the address bar on a private tab's own screen is used for searches and as `open_url`'s
+  fallback, under the same address rule as `open_url`.)
 - One Phone Agent engine at a time, owned outside the activity; a different model or accelerator
   closes the old engine first, and any other task loading a model closes Phone Agent's first.
 - "Keep the model loaded" defaults to Off; the other choices are "while PhoneAgent is open" and
@@ -346,3 +349,68 @@ Assumptions (change any by editing here):
   off). Other screens keep the view-level content-capture exclusion only.
 - targetSdk stays 37. `ACCESS_LOCAL_NETWORK` is not requested (no local MCP server is set up).
 
+## Phase 2.2 (assumptions; change any by editing here)
+
+- **open_url** sends `ACTION_VIEW` with the address and the extra `private_browsing_mode=true` to
+  Firefox's `IntentReceiverActivity`, which opens it in a private tab. (`OPEN_PRIVATE_TAB`, used
+  before, is the launcher's "New private tab" shortcut and ignores the address.) If after the wait
+  Firefox shows a private tab without a web page, the address is typed into that tab's address
+  bar with Enter. A changed screen that holds still for 2.5 s without any web view counts as "no
+  page coming". The model is told when no page loaded within 10 s; a page outside private
+  browsing stops the run.
+- **The address bar** obeys `open_url`'s rule in code: text that Firefox would treat as an
+  address (a known scheme, or one word with a dot, slash or colon, or `localhost`) must be a public
+  `https://` address and is typed in that form; other text (words with spaces, or one plain word)
+  is a search, sent to Firefox's default search engine. A web page's own inputs take any text.
+- **Waiting:** after an action the screen counts as settled when it changed (if a change was
+  expected), two reads match, the node count hasn't changed for 1 s and a web page on screen shows
+  text; at most 10 s after navigation or a tap, 3 s after small actions.
+- **Changed screen:** when the element the model chose has changed by the time it acts, the
+  action isn't run, the step isn't counted and the loop guard isn't touched; the model is asked
+  again on the settled screen with a one-line note, at most twice in a row (a third time counts as
+  a refused action).
+- **Evidence:** `finish` has an `evidence` field. A finish passes when every quoted piece (split at
+  "|", line breaks and ellipses) is on a screen of this run (ignoring case, spacing, quote styles,
+  dashes and the `[12]` ids), every number in the answer is in the quotes, and every name of two or
+  more capitalized words in the answer that isn't in the task is in the quotes (my addition to the
+  number rule, to catch answers from memory like Phase 2.1 task 4). An answer with no number and
+  no name needs no evidence ("not found"). The first failing finish is rejected with the reason
+  and the run goes on; a second one ends the run as finished, marked "Evidence: NOT verified".
+- **Final call:** when the loop guard (any of its stops) or the step limit ends a run that showed
+  page text, one more model call that offers only `finish` gets the newest page screens (at most 3,
+  about 2,400 tokens) and must answer from them with a quote or say the answer wasn't found. It is
+  checked the same way, with one retry. Its answer counts as finished and the result says it came
+  from the final call.
+- **One line before the tool call:** LiteRT-LM 0.18 keeps text written before a tool call (its
+  parser splits text and calls), so the model first writes one short line on whether the screen
+  answers the task; the run log shows it as "model: ...". Thinking stays off by default.
+- **Prompt:** searches go into the address bar (focused in a new private tab) with `submit`; known
+  addresses through `open_url`; on a results page, no new search, tap the result ("Wikipedia",
+  "Continued in Wikipedia"); never tap the search engine selector or Clear. Searching through an
+  `open_url` search address is out until `open_url` is confirmed on the phone.
+- **Compact observation:** text has no ids; a paragraph's text fragments and links (siblings in
+  one page parent) are one line, links numbered inline (`[7]Bologna`), at most 1,200 characters;
+  headings start with `# `. On a page, controls labelled only by their DOM id, clickable
+  containers labelled by the start of their text, controls without any label (inputs excepted)
+  and citation links (`[1]`, `[a]`, `[note 3]`) are not elements. Navigation and banner landmarks
+  are skipped, except inputs, buttons starting with "Search" and elements with the tab role; a
+  search landmark inside them is kept. So DuckDuckGo's All/Images/News links (links in a
+  navigation landmark, not tabs) are dropped. Subtrees whose DOM id names a fundraising, cookie or
+  consent notice (centralnotice, sitenotice, frb, fundrais, donat, cookie, consent, gdpr,
+  onetrust) and controls labelled "Donate..." or with a bare amount ("€5") are skipped. Neighbouring
+  lines with the same label become one (link over button over heading over text). The main
+  landmark comes first, then the rest of the page, then Firefox's toolbar, which keeps up to half
+  of the budget. The address bar's label no longer repeats the address shown in the header.
+- **Lock:** the run stops at once when the screen turns off (`ACTION_SCREEN_OFF`, registered for
+  the run only) and before any step or action when the keyguard shows, with "Stopped: the phone
+  was locked."; every agent action refuses while locked; PhoneAgent isn't brought to the front.
+  While a run is shown, the Stop chip's window keeps the screen on (`FLAG_KEEP_SCREEN_ON`, no
+  permission), so the screen timeout doesn't end runs.
+- **Tile:** the task runs on the tile model from Model memory (or, if it isn't downloaded, the
+  first downloaded model of the task); a Phone Agent screen showing another model is replaced by
+  that model's screen. Before Phone Agent loads any model, other loaded models (other tasks') are
+  closed, for every Phone Agent load, not only the tile's. The run log's first line names the
+  model the tile asked for.
+- **CI:** pushes that change only `docs/` or Markdown files outside `Android/src` don't build.
+- **Spike:** "Copy tree" copies the converted tree as JSON (no password values; clipboard marked
+  sensitive), so real screens can become test fixtures.

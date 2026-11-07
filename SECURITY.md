@@ -87,7 +87,11 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   itself, in Settings or in permission and install dialogs, and does not claim
   `isAccessibilityTool`.
 - **[done]** `open_url` accepts public `https://` addresses only (no IP addresses or local host
-  names), caps the URL length, and lists every URL in the run log.
+  names), caps the URL length, and lists every URL in the run log. An address typed into
+  Firefox's address bar is held to the same rule in code (and typed as `https://`); search words
+  go to Firefox's search engine.
+- **[done]** A task stops as soon as the screen turns off or the keyguard shows, and no action runs
+  while the phone is locked.
 
 ### Agent: what the model sees
 - **[done]** Screen text is wrapped in delimiters that page text cannot close, and labelled as
