@@ -503,7 +503,14 @@ object AgentRunner {
           when (action) {
             is AgentAction.Tap -> done(service, now, service.agentTap(now, action.id), ScreenWaiter.TAP, "Tapped.")
             is AgentAction.TypeText -> {
-              val outcome = service.agentType(now, action.id, action.text, action.submit)
+              // An address typed into Firefox's address bar goes in as the checked https:// address.
+              val text =
+                if (element != null && ToolPolicy.isAddressBar(now.facts, element)) {
+                  (ToolPolicy.addressBarInput(action.text) as? ToolPolicy.AddressBarInput.Address)?.url ?: action.text
+                } else {
+                  action.text
+                }
+              val outcome = service.agentType(now, action.id, text, action.submit)
               when {
                 outcome.ok && action.submit && outcome.detail.contains("Enter was refused") ->
                   done(

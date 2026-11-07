@@ -123,9 +123,58 @@ object ToolPolicy {
           ?: when {
             element == null -> noElement(action.id)
             "password" in element.states -> Decision.Refuse("Typing into password fields is not allowed.")
+            // Firefox's address bar opens what it is given: an address there obeys open_url's rule.
+            isAddressBar(facts, element) ->
+              (addressBarInput(action.text) as? AddressBarInput.Refused)?.let { Decision.Refuse(it.reason) }
+                ?: Decision.Allow
             else -> Decision.Allow
           }
     }
+
+  /** What typing into Firefox's address bar does with [text]: a web search, or opening an address. */
+  sealed interface AddressBarInput {
+    /** Search words: Firefox sends them to its search engine. Typed as they are. */
+    data class Search(val text: String) : AddressBarInput
+
+    /** An allowed address, typed as [url] (public https only, like open_url). */
+    data class Address(val url: String) : AddressBarInput
+
+    data class Refused(val reason: String) : AddressBarInput
+  }
+
+  /**
+   * Classifies address-bar text the way Firefox would treat it, erring towards "address": a known
+   * scheme ("javascript:", "about:", "file:", "http:"...), or a single word with a dot, slash or
+   * colon ("example.com", "192.168.1.1", "localhost:8080"), or "localhost". An address must pass
+   * [safeUrl]; anything else with words is a search.
+   */
+  fun addressBarInput(text: String): AddressBarInput {
+    val t = text.trim()
+    val scheme = SCHEME.find(t)?.value?.dropLast(1)?.lowercase()
+    val oneWord = t.isNotEmpty() && t.none { it.isWhitespace() }
+    val address =
+      (scheme != null && (scheme in KNOWN_SCHEMES || t.startsWith("$scheme://", ignoreCase = true))) ||
+        (oneWord && (t.any { it == '.' || it == '/' || it == ':' } || t.equals("localhost", ignoreCase = true)))
+    if (!address) return AddressBarInput.Search(text)
+    val safe =
+      safeUrl(t)
+        ?: return AddressBarInput.Refused(
+          "Only public https:// addresses can be opened, in the address bar too. Type search words, or a public https:// address."
+        )
+    return AddressBarInput.Address(safe)
+  }
+
+  /** Firefox's own address field: an input in Firefox outside the web page. */
+  fun isAddressBar(facts: ScreenFacts, element: Element): Boolean =
+    facts.isFirefox && !element.inPage && element.role == "input"
+
+  private val SCHEME = Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE)
+
+  private val KNOWN_SCHEMES =
+    setOf(
+      "http", "https", "javascript", "data", "file", "about", "content", "intent", "chrome", "resource",
+      "moz-extension", "view-source", "blob", "jar", "ftp", "ws", "wss", "market", "tel", "sms", "mailto", "geo",
+    )
 
   /** The address to open, or null if it is not allowed: https only, public host names only. */
   fun safeUrl(input: String): String? {

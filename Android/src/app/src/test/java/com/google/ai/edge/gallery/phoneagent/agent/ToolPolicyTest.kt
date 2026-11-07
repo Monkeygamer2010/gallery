@@ -29,6 +29,8 @@ private val UNKNOWN_FIREFOX = ScreenFacts("org.mozilla.firefox", "Firefox", priv
 private val LINK = Element(1, 10, "link", "Munich - Wikipedia", emptyList())
 private val INPUT = Element(2, 11, "input", "Search", listOf("empty"))
 private val PASSWORD = Element(3, 12, "input", "Password", listOf("password"))
+private val ADDRESS_BAR = Element(4, 13, "input", "Search or enter address", listOf("empty", "focused"))
+private val PAGE_SEARCH = Element(5, 14, "input", "Search Wikipedia", listOf("empty"), inPage = true)
 
 class ToolPolicyTest {
   private fun allowed(action: AgentAction, facts: ScreenFacts = PRIVATE_FIREFOX, element: Element? = null) =
@@ -128,5 +130,42 @@ class ToolPolicyTest {
       )) {
       assertNull(bad, ToolPolicy.safeUrl(bad))
     }
+  }
+
+  // Firefox's address bar opens whatever it is given, so an address there obeys open_url's rule.
+  @Test
+  fun anAddressTypedIntoTheAddressBarMustBeAPublicHttpsAddress() {
+    for (blocked in
+      listOf(
+        "http://example.com",
+        "192.168.1.1",
+        "localhost:8080",
+        "localhost",
+        "about:config",
+        "javascript:alert(1)",
+        "file:///sdcard/notes.txt",
+        "intent://scan#Intent;end",
+        "view-source:https://example.com",
+        "https://router.local/admin",
+      )) {
+      assertTrue(blocked, !allowed(AgentAction.TypeText(4, blocked, submit = true), element = ADDRESS_BAR))
+    }
+    for (search in listOf("University of Bologna founded", "Bologna", "site:wikipedia.org Bologna", "Python 3.12 release")) {
+      assertTrue(search, allowed(AgentAction.TypeText(4, search, submit = true), element = ADDRESS_BAR))
+      assertEquals(ToolPolicy.AddressBarInput.Search(search), ToolPolicy.addressBarInput(search))
+    }
+    // An allowed address is typed as its https:// form.
+    assertTrue(allowed(AgentAction.TypeText(4, "en.wikipedia.org/wiki/Bologna", submit = true), element = ADDRESS_BAR))
+    assertEquals(
+      ToolPolicy.AddressBarInput.Address("https://en.wikipedia.org/wiki/Bologna"),
+      ToolPolicy.addressBarInput("en.wikipedia.org/wiki/Bologna"),
+    )
+  }
+
+  @Test
+  fun aWebPagesOwnSearchBoxIsNotTheAddressBar() {
+    assertTrue(allowed(AgentAction.TypeText(5, "http://example.com", submit = true), element = PAGE_SEARCH))
+    assertTrue(!ToolPolicy.isAddressBar(PRIVATE_FIREFOX, PAGE_SEARCH))
+    assertTrue(ToolPolicy.isAddressBar(PRIVATE_FIREFOX, ADDRESS_BAR))
   }
 }
