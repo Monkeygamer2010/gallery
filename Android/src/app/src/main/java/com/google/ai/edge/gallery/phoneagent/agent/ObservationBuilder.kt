@@ -35,6 +35,8 @@ class RawScreen(
   val keyboardOpen: Boolean = false,
   /** The converter's one-line summary, for diagnostics. */
   val converter: String? = null,
+  /** The screen is off or the keyguard shows: nothing is read and the run stops. */
+  val locked: Boolean = false,
 )
 
 /** What the agent loop sees in one step. Built by [ObservationBuilder]; plain data. */
@@ -46,6 +48,8 @@ data class Observation(
   val refusal: String?,
   val browser: BrowserState? = null,
   val converter: String? = null,
+  /** The phone was locked (screen off or keyguard): the run stops. */
+  val locked: Boolean = false,
 ) {
   /** What the model sees between the screen delimiters. */
   val modelText: String
@@ -105,6 +109,9 @@ data class Observation(
 object ObservationBuilder {
   fun build(raw: RawScreen, ownPackage: String): Observation {
     val pkg = raw.packageName
+    if (raw.locked) {
+      return Observation(ScreenFacts(pkg, raw.appLabel), null, "The phone is locked or its screen is off.", locked = true)
+    }
     if (!FirefoxReader.isFirefox(pkg) || pkg == ownPackage) {
       val facts = ScreenFacts(pkg, raw.appLabel)
       return Observation(facts, null, refusal(facts, ownPackage), converter = raw.converter)

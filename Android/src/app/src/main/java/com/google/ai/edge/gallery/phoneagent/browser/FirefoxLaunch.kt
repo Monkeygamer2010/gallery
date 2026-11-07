@@ -28,16 +28,37 @@ object FirefoxLaunch {
     FirefoxReader.PACKAGES.firstOrNull { pm.getLaunchIntentForPackage(it) != null }
 
   /**
-   * Firefox's own "new private tab" intent (the one behind its launcher shortcut), with [url] or,
-   * when [url] is null, Firefox's private home page. Returns null when Firefox is missing or the
-   * address is not allowed ([ToolPolicy.safeUrl]).
+   * The intent that opens [url] in a private tab, or, when [url] is null, a new private tab with
+   * the address bar focused. Returns null when Firefox is missing or the address is not allowed
+   * ([ToolPolicy.safeUrl]).
+   *
+   * An address goes as a VIEW intent to Firefox's IntentReceiverActivity with the private-mode
+   * extra, which Firefox hands to its private tab processor (`selectOrAddTab(url, private =
+   * true)`). Firefox's "New private tab" shortcut action (OPEN_PRIVATE_TAB), which Phase 2 used,
+   * ignores the address: it only opens a blank private tab.
    */
   fun privateTab(pm: PackageManager, url: String?): Intent? {
     val pkg = installedPackage(pm) ?: return null
-    val safe = url?.let { ToolPolicy.safeUrl(it) ?: return null }
-    return Intent(FirefoxReader.ACTION_OPEN_PRIVATE_TAB)
+    if (url == null) {
+      return Intent(FirefoxReader.ACTION_OPEN_PRIVATE_TAB)
+        .setClassName(pkg, FirefoxReader.INTENT_RECEIVER_ACTIVITY)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    val safe = ToolPolicy.safeUrl(url) ?: return null
+    return Intent(Intent.ACTION_VIEW, Uri.parse(safe))
       .setClassName(pkg, FirefoxReader.INTENT_RECEIVER_ACTIVITY)
-      .apply { if (safe != null) data = Uri.parse(safe) }
+      .putExtra(FirefoxReader.EXTRA_PRIVATE_BROWSING_MODE, true)
       .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  }
+
+  /** What [privateTab] sends, for the spike's open_url test (no address). */
+  fun describe(intent: Intent): String = buildString {
+    append("action ").append(intent.action)
+    append(", component ").append(intent.component?.flattenToShortString())
+    append(", data ").append(if (intent.data != null) "the address" else "none")
+    if (intent.hasExtra(FirefoxReader.EXTRA_PRIVATE_BROWSING_MODE)) {
+      append(", extra ").append(FirefoxReader.EXTRA_PRIVATE_BROWSING_MODE).append("=true")
+    }
+    append(", flags 0x").append(Integer.toHexString(intent.flags))
   }
 }

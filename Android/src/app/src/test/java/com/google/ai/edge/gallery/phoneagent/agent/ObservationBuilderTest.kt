@@ -109,6 +109,16 @@ class ObservationBuilderTest {
   }
 
   @Test
+  fun aLockedPhoneIsNeverRead() {
+    val raw =
+      RawScreen(FIREFOX, "Firefox", GeckoFixtures.copy(GeckoFixtures.wikipediaArticle()).root, GeckoFixtures.SCREEN, locked = true)
+    val obs = ObservationBuilder.build(raw, OWN)
+    assertTrue(obs.locked)
+    assertNull(obs.read)
+    assertFalse(obs.modelText.contains("1088"))
+  }
+
+  @Test
   fun aNormalFirefoxTabIsNotRead() {
     val normal =
       FakeNode(

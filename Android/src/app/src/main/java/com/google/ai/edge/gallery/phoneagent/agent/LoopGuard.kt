@@ -52,6 +52,14 @@ class LoopGuard(
     steps++
   }
 
+  /**
+   * The last step does not count: its action was not run because the screen changed before it
+   * (the model is asked again on the new screen). Nothing else is undone.
+   */
+  fun refund() {
+    if (steps > 0) steps--
+  }
+
   /** The model's reply had no usable tool call. */
   fun onInvalid(): Verdict {
     invalidInARow++

@@ -113,8 +113,13 @@ object AgentEngine {
   private fun keyOf(path: String, accelerator: Accelerator, maxTokens: Int, name: String) =
     "$name|$path|${accelerator.label}|$maxTokens"
 
-  private val toolProviders by lazy {
-    AgentTools.SPECS.map { spec ->
+  private val toolProviders by lazy { providers(AgentTools.SPECS) }
+
+  /** Only finish: the last call of a run that ended without one. */
+  private val finishOnlyProviders by lazy { providers(AgentTools.SPECS.filter { it.name == "finish" }) }
+
+  private fun providers(specs: List<ToolSpec>) =
+    specs.map { spec ->
       tool(
         object : OpenApiTool {
           override fun getToolDescriptionJsonString(): String = spec.toJson()
@@ -124,7 +129,6 @@ object AgentEngine {
         }
       )
     }
-  }
 
   /** Loads [model]; called by the task on a background thread. [onDone] gets "" or an error. */
   fun initialize(context: Context, model: Model, onDone: (String) -> Unit) {
@@ -232,9 +236,16 @@ object AgentEngine {
 
   /**
    * Runs one step: a fresh conversation, [prompt] as the only user message, one reply. Cancelling
-   * the coroutine (Stop, timeout) cancels the engine's work.
+   * the coroutine (Stop, timeout) cancels the engine's work. With [finishOnly], finish is the only
+   * tool declared.
    */
-  suspend fun step(model: Model, systemPrompt: String, prompt: String, thinking: Boolean): ModelReply =
+  suspend fun step(
+    model: Model,
+    systemPrompt: String,
+    prompt: String,
+    thinking: Boolean,
+    finishOnly: Boolean = false,
+  ): ModelReply =
     withContext(Dispatchers.IO) {
       val instance = model.instance as? LlmModelInstance ?: throw AgentError("the model is not loaded.")
       val start = SystemClock.elapsedRealtime()
@@ -243,7 +254,7 @@ object AgentEngine {
         instance.engine.createConversation(
           ConversationConfig(
             systemInstruction = Contents.of(systemPrompt),
-            tools = toolProviders,
+            tools = if (finishOnly) finishOnlyProviders else toolProviders,
             samplerConfig = sampler(model.currentAccelerator ?: Accelerator.GPU),
             automaticToolCalling = false,
             maxOutputToken = if (thinking) MAX_OUTPUT_TOKENS_THINKING else MAX_OUTPUT_TOKENS,

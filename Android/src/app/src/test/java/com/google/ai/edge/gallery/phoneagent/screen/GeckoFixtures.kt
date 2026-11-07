@@ -85,19 +85,24 @@ object GeckoFixtures {
   const val LEAD =
     "The University of Bologna is a public research university in Bologna, Italy. Teaching began around 1088."
 
-  private fun toolbar(): FakeNode =
+  private fun toolbar(url: String = URL, private: Boolean = true, tabs: Int = 5): FakeNode =
     FakeNode(
       className = "android.view.View",
       bounds = Bounds(0, 80, 1080, 220),
       children =
         listOf(
           FakeNode(desc = "Site information", clickable = true, bounds = Bounds(0, 90, 120, 210)),
-          FakeNode(text = "$URL. Search or enter address", clickable = true, bounds = Bounds(120, 90, 700, 210)),
+          FakeNode(text = "$url. Search or enter address", clickable = true, bounds = Bounds(120, 90, 700, 210)),
           FakeNode(desc = "Reader view", clickable = true, bounds = Bounds(700, 90, 800, 210)),
-          FakeNode(className = "android.widget.Button", text = "New private tab", clickable = true, bounds = Bounds(800, 90, 900, 210)),
+          FakeNode(
+            className = "android.widget.Button",
+            text = if (private) "New private tab" else "New tab",
+            clickable = true,
+            bounds = Bounds(800, 90, 900, 210),
+          ),
           FakeNode(
             viewId = "TabCounterTestTags.tabCounter",
-            desc = "Private Tabs Open: 5. Tap to switch tabs.",
+            desc = "${if (private) "Private Tabs" else "Tabs"} Open: $tabs. Tap to switch tabs.",
             clickable = true,
             bounds = Bounds(900, 90, 990, 210),
           ),
@@ -159,6 +164,33 @@ object GeckoFixtures {
       bounds = SCREEN,
       children = listOf(toolbar(), gecko(scrolledBy, pageFlaggedVisible)),
     )
+
+  /**
+   * A tab whose page shows [lines] short paragraphs, plus [below] paragraphs just under the
+   * screen: converted and counted, but not shown (a page still adding content below the fold).
+   */
+  fun textPage(lines: Int, below: Int = 0, private: Boolean = true, tabs: Int = 5): FakeNode {
+    // Each paragraph is its own node with a text leaf, as in GeckoView's tree.
+    fun paragraph(text: String, top: Int) =
+      FakeNode(bounds = Bounds(0, top, 1080, top + 50), children = listOf(FakeNode(text = text, bounds = Bounds(0, top, 1080, top + 50))))
+    val shown = (1..lines).map { paragraph("Paragraph $it of the page.", 240 + it * 60) }
+    val later = (1..below).map { paragraph("Later paragraph $it.", 2400 + it * 60) }
+    val document = FakeNode(bounds = Bounds(0, 220, 1080, 2340 + 60 * (below + 1)), children = shown + later)
+    return FakeNode(
+      className = "android.widget.FrameLayout",
+      bounds = SCREEN,
+      children =
+        listOf(
+          toolbar(private = private, tabs = tabs),
+          FakeNode(
+            className = ScreenSerializer.WEB_VIEW_CLASS,
+            bounds = Bounds(0, 220, 1080, 2340),
+            scrollActions = true,
+            children = listOf(document),
+          ),
+        ),
+    )
+  }
 
   /** Firefox's own settings list in private mode: no web view, no home page. */
   fun firefoxSettings(): FakeNode =

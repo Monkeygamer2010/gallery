@@ -358,6 +358,16 @@ private fun RunReport(run: RunState) {
       SelectionContainer { Text(outcome, style = MaterialTheme.typography.bodyMedium) }
     }
   }
+  run.finalCall?.let { reason ->
+    Text(
+      "Answered in the final, finish-only call after: $reason",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+  run.evidence?.let { evidence ->
+    Section("Evidence") { SelectionContainer { Text(evidence, style = MaterialTheme.typography.bodySmall) } }
+  }
   for ((title, text) in run.results) {
     Section("Result: $title") { SelectionContainer { Text(text, style = MaterialTheme.typography.bodyMedium) } }
   }

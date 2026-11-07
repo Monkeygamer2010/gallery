@@ -176,4 +176,13 @@ class FirefoxReaderTest {
     assertNull(FirefoxReader.leadingUrl("Search or enter address"))
     assertNull(FirefoxReader.leadingUrl(null))
   }
+
+  @Test
+  fun readsTheNumberOfOpenTabs() {
+    val counter = n(1, desc = "Private Tabs Open: 7. Tap to switch tabs.", viewId = "TabCounterTestTags.tabCounter")
+    assertEquals(7, FirefoxReader.read(firefox(listOf(counter), emptyList()), SCREEN).tabCount)
+    val plain = n(1, text = "3", viewId = "org.mozilla.firefox:id/tabcounter")
+    assertEquals(3, FirefoxReader.read(firefox(listOf(plain), emptyList()), SCREEN).tabCount)
+    assertNull(FirefoxReader.read(firefox(emptyList(), emptyList()), SCREEN).tabCount)
+  }
 }

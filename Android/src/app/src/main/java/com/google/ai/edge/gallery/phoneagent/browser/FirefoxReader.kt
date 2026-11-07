@@ -32,6 +32,8 @@ data class BrowserState(
   val webContent: Boolean = false,
   /** Firefox's home page is on screen (a view id mentions "homepage"). */
   val homepage: Boolean = false,
+  /** Open tabs, from Firefox's tab counter ("Private Tabs Open: 5"), when shown. */
+  val tabCount: Int? = null,
 ) {
   val isPrivate: Boolean
     get() = privateEvidence.isNotEmpty()
@@ -56,9 +58,20 @@ object FirefoxReader {
       "io.github.forkmaintainers.iceraven",
     )
 
-  /** Fenix's private-tab action, handled by its IntentReceiverActivity (spike option b). */
+  /**
+   * Firefox's "New private tab" shortcut action. Its handler (NewTabShortcutIntentProcessor) opens
+   * a private tab with the address bar focused and ignores any address in the intent.
+   */
   const val ACTION_OPEN_PRIVATE_TAB = "org.mozilla.fenix.OPEN_PRIVATE_TAB"
   const val INTENT_RECEIVER_ACTIVITY = "org.mozilla.fenix.IntentReceiverActivity"
+
+  /**
+   * Extra that IntentReceiverActivity honours on a VIEW intent: the address opens in a private tab
+   * even when "Open links in a private tab" is off (HomeActivity.PRIVATE_BROWSING_MODE).
+   */
+  const val EXTRA_PRIVATE_BROWSING_MODE = "private_browsing_mode"
+
+  private val TAB_COUNT = Regex("tabs? open:?\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
   const val MAX_URL_LENGTH = 2048
 
@@ -123,6 +136,7 @@ object FirefoxReader {
     var toolbarSource: String? = null
     var webContent = false
     var homepage = false
+    var tabCount: Int? = null
 
     fun visit(node: UiNode) {
       if (!node.visible || node.bounds.isEmpty || !node.bounds.intersects(screen)) return
@@ -135,6 +149,13 @@ object FirefoxReader {
       if (idName?.contains("homepage", ignoreCase = true) == true) homepage = true
       val text = node.text?.trim()?.takeIf { it.isNotEmpty() }
       val desc = node.contentDescription?.trim()?.takeIf { it.isNotEmpty() }
+      // The tabs button: "Private Tabs Open: 5. Tap to switch tabs.", or a test-tag id and a number.
+      if (tabCount == null) {
+        val counter = (desc ?: text)?.let { TAB_COUNT.find(it) }
+        if (counter != null || idName?.contains("tabcounter", ignoreCase = true) == true) {
+          tabCount = counter?.groupValues?.get(1)?.toIntOrNull() ?: text?.toIntOrNull()
+        }
+      }
       if (url == null && idName != null && idName in URL_VIEW_IDS && text != null) {
         url = text
         urlSource = "view id $idName"
@@ -169,6 +190,6 @@ object FirefoxReader {
       url = toolbarUrl ?: fallbackUrl
       urlSource = if (toolbarUrl != null) toolbarSource else fallbackSource
     }
-    return BrowserState(url, urlSource, evidence.distinct().take(10), webContent, homepage)
+    return BrowserState(url, urlSource, evidence.distinct().take(10), webContent, homepage, tabCount)
   }
 }

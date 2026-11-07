@@ -90,7 +90,8 @@ sealed interface AgentAction {
     override fun describe() = "save_result \"${oneLine(title, 40)}\""
   }
 
-  data class Finish(val summary: String) : AgentAction {
+  /** [evidence]: text the model copied from a screen to support the answer (several joined by "|"). */
+  data class Finish(val summary: String, val evidence: String = "") : AgentAction {
     override val tool = "finish"
 
     override fun describe() = "finish"
@@ -158,6 +159,7 @@ object AgentTools {
   const val MAX_TITLE_CHARS = 100
   const val MAX_RESULT_CHARS = 4000
   const val MAX_SUMMARY_CHARS = 2000
+  const val MAX_EVIDENCE_CHARS = 1500
   const val MAX_APP_NAME_CHARS = 60
 
   val SPECS: List<ToolSpec> =
@@ -213,8 +215,17 @@ object AgentTools {
       ),
       ToolSpec(
         "finish",
-        "End the task. Call it when you have the answer, or when the task cannot be done.",
-        listOf(ToolParamSpec("summary", "string", "The answer for the owner, or why the task could not be done.")),
+        "End the task. Call it as soon as a screen shows the answer, or when the task cannot be done.",
+        listOf(
+          ToolParamSpec("summary", "string", "The answer for the owner, or why the task could not be done."),
+          ToolParamSpec(
+            "evidence",
+            "string",
+            "The text that shows the answer, copied exactly from a screen you saw; separate several pieces " +
+              "with |. Every number and name in the answer must be in it. Empty if the task cannot be done.",
+            required = false,
+          ),
+        ),
       ),
     )
 
@@ -267,7 +278,8 @@ object AgentTools {
       }
       "finish" -> {
         val summary = text(args["summary"])?.trim()?.takeIf { it.isNotEmpty() } ?: return invalid("summary is missing.")
-        ParsedCall.Ok(AgentAction.Finish(summary.take(MAX_SUMMARY_CHARS)))
+        val evidence = text(args["evidence"])?.trim().orEmpty()
+        ParsedCall.Ok(AgentAction.Finish(summary.take(MAX_SUMMARY_CHARS), evidence.take(MAX_EVIDENCE_CHARS)))
       }
       else -> ParsedCall.Invalid("Unknown tool \"${oneLine(tool, 40)}\". Use one of: ${NAMES.joinToString()}.")
     }

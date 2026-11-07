@@ -39,7 +39,10 @@ sealed class SpikeCommand(val title: String) {
   data object Back : SpikeCommand("Back")
 
   data class OpenUrl(val url: String, val privateIntent: Boolean) :
-    SpikeCommand(if (privateIntent) "Open in a private tab (OPEN_PRIVATE_TAB)" else "Open with ACTION_VIEW")
+    SpikeCommand(if (privateIntent) "Open in a private tab (VIEW + private extra)" else "Open with ACTION_VIEW")
+
+  /** The agent's open_url exactly: private-tab intent, wait for a page, address-bar fallback. */
+  data class TestOpenUrl(val url: String) : SpikeCommand("Test open_url")
 
   data object LaunchFirefox : SpikeCommand("Launch Firefox from the service")
 

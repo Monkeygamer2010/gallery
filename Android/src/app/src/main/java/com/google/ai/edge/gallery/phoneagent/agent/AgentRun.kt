@@ -49,6 +49,10 @@ data class StepMetrics(
   /** Carrying out the action and waiting for the screen to settle. */
   val actMs: Long,
   val promptTokens: Int,
+  /** The screen changed before the action, so it was not run and the model was asked again (not a step). */
+  val reask: Boolean = false,
+  /** The final, finish-only call after the run ended without a finish (not a step). */
+  val finalCall: Boolean = false,
 )
 
 /** Measurements of one run, for docs/LEARNINGS.md. Contains no screen content and no URLs. */
@@ -79,7 +83,10 @@ data class RunMetrics(
     append(", thinking ").append(if (thinking) "on" else "off")
     append(", speculative decoding ").append(speculativeDecoding).append('\n')
     append("Model load (cold start): ").append(modelLoadMs?.let { "$it ms" } ?: "not measured (already loaded)").append('\n')
-    append("Steps: ").append(steps.size).append(", total ").append(totalMs).append(" ms\n")
+    append("Steps: ").append(steps.count { !it.reask && !it.finalCall })
+    steps.count { it.reask }.takeIf { it > 0 }?.let { append(" (and ").append(it).append(" asked again after the screen changed)") }
+    steps.count { it.finalCall }.takeIf { it > 0 }?.let { append(" (and ").append(it).append(" final finish-only call)") }
+    append(", total ").append(totalMs).append(" ms\n")
     if (steps.isNotEmpty()) {
       val model = steps.map { it.modelMs }.sorted()
       val perStep = steps.map { it.observeMs + it.modelMs + it.actMs }.sorted()
@@ -89,7 +96,10 @@ data class RunMetrics(
       for (s in steps) {
         append("  ").append(s.step).append(". ").append(s.tool).append(": read ").append(s.observeMs)
         append(" ms, model ").append(s.modelMs).append(" ms, act and settle ").append(s.actMs).append(" ms, ~")
-        append(s.promptTokens).append(" tokens\n")
+        append(s.promptTokens).append(" tokens")
+        if (s.reask) append(" (asked again)")
+        if (s.finalCall) append(" (final call)")
+        append('\n')
       }
     }
     append("Memory before: ").append(memoryBefore?.line() ?: "-").append('\n')
@@ -117,6 +127,10 @@ data class RunState(
   val urls: List<String> = emptyList(),
   /** The model's finish summary, or why the run stopped. */
   val outcome: String? = null,
+  /** Whether the finish's evidence was found on a screen of the run, and the quote. */
+  val evidence: String? = null,
+  /** Set when the answer came from the final, finish-only call: why the run had ended. */
+  val finalCall: String? = null,
   val metrics: RunMetrics = RunMetrics(),
 ) {
   val active: Boolean
@@ -136,6 +150,8 @@ data class RunState(
     }
     for ((title, text) in results) append("Result \"").append(title).append("\":\n").append(text).append('\n')
     outcome?.let { append("Answer / outcome:\n").append(it).append('\n') }
+    finalCall?.let { append("Answered in the final, finish-only call after: ").append(it).append('\n') }
+    evidence?.let { append(it).append('\n') }
     if (observations.isNotEmpty()) {
       append("\nWhat the model saw, step by step:\n")
       for (o in observations) {

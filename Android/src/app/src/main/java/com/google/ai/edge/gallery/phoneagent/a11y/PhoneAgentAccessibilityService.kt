@@ -18,6 +18,7 @@ package com.google.ai.edge.gallery.phoneagent.a11y
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
@@ -28,6 +29,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -35,6 +37,7 @@ import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import android.view.accessibility.AccessibilityWindowInfo
 import com.google.ai.edge.gallery.phoneagent.agent.AgentRunner
 import com.google.ai.edge.gallery.phoneagent.agent.ObservationBuilder
+import com.google.ai.edge.gallery.phoneagent.agent.PageOpener
 import com.google.ai.edge.gallery.phoneagent.agent.RawScreen
 import com.google.ai.edge.gallery.phoneagent.agent.ToolPolicy
 import com.google.ai.edge.gallery.phoneagent.browser.BrowserState
@@ -160,25 +163,32 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         val outcome =
           when {
             read == null -> "Not read: ${view.refusal}"
-            !view.pageArea -> "No web page on screen (${read.elements.size} elements, about ${read.estimatedTokens} tokens)"
+            !view.pageArea -> "No web page on screen (${read.elements.size} ids, about ${read.estimatedTokens} tokens)"
             view.pageWithoutContent -> "PROBLEM: a web page is on screen but none of its text is in the observation"
             else ->
-              "Page content: yes (${read.pageLines} lines from the page of ${read.elements.size} elements, " +
+              "Page content: yes (${read.pageLines} lines from the page, ${read.elements.size} ids, " +
                 "about ${read.estimatedTokens} tokens)"
           }
-        val summary =
-          ReadSummary(
-            compact = view.modelText,
-            details = view.classification(),
-            stats =
-              "Elements: ${read?.elements?.size ?: 0}, from the page: ${view.pageLines}\n" +
-                "Tokens (estimate): ${read?.estimatedTokens ?: 0}\n" +
-                "Read time: ${obs.readMs} ms",
-            browser = view.browser?.let { describe(it) },
-            signatures = read?.elements?.associate { it.id to it.signature }.orEmpty(),
-            diagnostics = listOfNotNull(view.converter, read?.diagnostics?.report()).joinToString("\n"),
+        SpikeEntry(command.title, outcome, agentSummary(obs), null)
+      }
+      is SpikeCommand.TestOpenUrl -> {
+        val before = observeForAgent()
+        val (report, after) =
+          PageOpener.open(
+            url = command.url,
+            before = before,
+            look = { observeForAgent() },
+            view = { it.view },
+            send = { agentOpenPrivateTab(command.url) },
+            typeAddress = { agentTypeInAddressBar(it, command.url) },
           )
-        SpikeEntry(command.title, outcome, summary, null)
+        val verdict =
+          when {
+            report.loaded -> "PAGE LOADED"
+            report.notPrivate -> "NOT PRIVATE"
+            else -> "NO PAGE"
+          }
+        SpikeEntry(command.title, "$verdict. ${report.detail}", agentSummary(after), null)
       }
       is SpikeCommand.Tap -> act(command, command.id, command.expected) { shot, element -> tap(shot, element) }
       is SpikeCommand.Type ->
@@ -313,10 +323,28 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
       )
     }
 
+  /** The spike's view of an agent observation: exactly what the model would see. */
+  private fun agentSummary(obs: AgentObservation): ReadSummary {
+    val view = obs.view
+    val read = view.read
+    return ReadSummary(
+      compact = view.modelText,
+      details = view.classification(),
+      stats =
+        "Ids: ${read?.elements?.size ?: 0}, page lines: ${view.pageLines}\n" +
+          "Tokens (estimate): ${read?.estimatedTokens ?: 0}\n" +
+          "Read time: ${obs.readMs} ms",
+      browser = view.browser?.let { describe(it) },
+      signatures = read?.elements?.associate { it.id to it.signature }.orEmpty(),
+      diagnostics = listOfNotNull(view.converter, read?.diagnostics?.report()).joinToString("\n"),
+    )
+  }
+
   private fun describe(state: BrowserState): String =
     "Address: ${state.url ?: "not found"}${state.urlSource?.let { " (from $it)" } ?: ""}\n" +
       "Private tab: ${if (state.isPrivate) "yes" else "no evidence"}\n" +
       "Shows: ${if (state.webContent) "a web page" else if (state.homepage) "Firefox's home page" else "Firefox's own screen"}\n" +
+      "Tabs open: ${state.tabCount ?: "not shown"}\n" +
       if (state.privateEvidence.isEmpty()) "Evidence: none" else "Evidence:\n" + state.privateEvidence.joinToString("\n") { "- $it" }
 
   private fun appLabel(pkg: String): String =
@@ -485,12 +513,11 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     val pkg = firefoxPackage() ?: return "Failed: Firefox is not installed"
     val intent =
       if (privateIntent) {
-        Intent(FirefoxReader.ACTION_OPEN_PRIVATE_TAB, Uri.parse(safe))
-          .setClassName(pkg, FirefoxReader.INTENT_RECEIVER_ACTIVITY)
+        FirefoxLaunch.privateTab(packageManager, safe) ?: return "Refused: not a public https:// address"
       } else {
         Intent(Intent.ACTION_VIEW, Uri.parse(safe)).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(pkg)
       }
-    return startFromService(intent, "Sent to $pkg from the service")
+    return startFromService(intent, "Sent to $pkg from the service (${FirefoxLaunch.describe(intent)})")
   }
 
   private fun startFromService(intent: Intent, success: String): String =
@@ -538,9 +565,10 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
   suspend fun observeForAgent(): AgentObservation =
     withContext(Dispatchers.Default) {
       val start = SystemClock.elapsedRealtime()
+      val locked = isLocked()
       val front = frontWindow()
       val pkg = front.root?.packageName?.toString()
-      val convert = front.root != null && FirefoxReader.isFirefox(pkg) && pkg != packageName
+      val convert = !locked && front.root != null && FirefoxReader.isFirefox(pkg) && pkg != packageName
       val tree = if (convert) NodeConverter.convert(front.root!!, screen = front.screen) else null
       val raw =
         RawScreen(
@@ -550,6 +578,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
           screen = front.screen,
           keyboardOpen = front.keyboardOpen,
           converter = tree?.summary(),
+          locked = locked,
         )
       val view = ObservationBuilder.build(raw, packageName)
       val read = view.read
@@ -576,41 +605,81 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     return FrontWindow(rootNode, screen, keyboardOpen)
   }
 
+  /** The screen is off or the keyguard is showing. No agent action runs then. */
+  fun isLocked(): Boolean =
+    getSystemService(PowerManager::class.java)?.isInteractive == false ||
+      getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+
+  private fun lockedOutcome(): ActionOutcome? = if (isLocked()) ActionOutcome(false, "the phone is locked") else null
+
   /** Taps element [id] of [observation], which the runner has just taken and checked. */
   suspend fun agentTap(observation: AgentObservation, id: Int): ActionOutcome {
+    lockedOutcome()?.let { return it }
     val shot = observation.snapshot ?: return ActionOutcome(false, "The screen was not read")
     val element = shot.read.element(id) ?: return ActionOutcome(false, "No element [$id]")
     return outcome(tap(shot, element))
   }
 
   suspend fun agentType(observation: AgentObservation, id: Int, text: String, submit: Boolean): ActionOutcome {
+    lockedOutcome()?.let { return it }
     val shot = observation.snapshot ?: return ActionOutcome(false, "The screen was not read")
     val element = shot.read.element(id) ?: return ActionOutcome(false, "No element [$id]")
     return outcome(type(shot, element, text, submit))
   }
 
   suspend fun agentScroll(observation: AgentObservation, down: Boolean): ActionOutcome {
+    lockedOutcome()?.let { return it }
     val shot = observation.snapshot ?: return ActionOutcome(false, "The screen was not read")
     return outcome(scroll(shot, down))
   }
 
-  fun agentBack(): ActionOutcome =
-    if (performGlobalAction(GLOBAL_ACTION_BACK)) ActionOutcome(true, "Back pressed") else ActionOutcome(false, "Back failed")
+  fun agentBack(): ActionOutcome {
+    lockedOutcome()?.let { return it }
+    return if (performGlobalAction(GLOBAL_ACTION_BACK)) ActionOutcome(true, "Back pressed") else ActionOutcome(false, "Back failed")
+  }
 
-  fun agentHome(): ActionOutcome =
-    if (performGlobalAction(GLOBAL_ACTION_HOME)) ActionOutcome(true, "Home pressed") else ActionOutcome(false, "Home failed")
+  fun agentHome(): ActionOutcome {
+    lockedOutcome()?.let { return it }
+    return if (performGlobalAction(GLOBAL_ACTION_HOME)) ActionOutcome(true, "Home pressed") else ActionOutcome(false, "Home failed")
+  }
+
+  /**
+   * Types [url] into Firefox's address bar and presses Enter: the field that is focused in a new
+   * private tab, or, if the bar shows the address, the bar after tapping it. Used by open_url when
+   * Firefox ignored the address in the intent. The address is checked again here.
+   */
+  suspend fun agentTypeInAddressBar(observation: AgentObservation, url: String): ActionOutcome {
+    lockedOutcome()?.let { return it }
+    val safe = ToolPolicy.safeUrl(url) ?: return ActionOutcome(false, "Address refused")
+    var shot = observation.snapshot ?: return ActionOutcome(false, "The screen was not read")
+    var field = addressField(shot.read)
+    if (field == null) {
+      val bar =
+        shot.read.elements.firstOrNull { !it.inPage && it.label.contains("enter address", ignoreCase = true) }
+          ?: return ActionOutcome(false, "No address bar on screen")
+      tap(shot, bar)
+      delay(ADDRESS_BAR_OPEN_MS)
+      shot = observeForAgent().snapshot ?: return ActionOutcome(false, "The screen was not read")
+      field = addressField(shot.read) ?: return ActionOutcome(false, "The address bar did not open")
+    }
+    return outcome(type(shot, field, safe, pressEnter = true))
+  }
+
+  /** Firefox's own address field: an input outside the web page. */
+  private fun addressField(read: ScreenRead): Element? = read.elements.firstOrNull { !it.inPage && it.role == "input" }
 
   /**
    * Opens [url] (or Firefox's private home page) in a new private tab. Allowed from the background
    * because the system binds this service; the first launch of a run comes from the visible app.
    */
   fun agentOpenPrivateTab(url: String?): ActionOutcome {
+    lockedOutcome()?.let { return it }
     val intent =
       FirefoxLaunch.privateTab(packageManager, url)
         ?: return ActionOutcome(false, if (FirefoxLaunch.installedPackage(packageManager) == null) "Firefox is not installed" else "Address refused")
     return try {
       startActivity(intent)
-      ActionOutcome(true, "Sent to Firefox")
+      ActionOutcome(true, "Sent to Firefox (${FirefoxLaunch.describe(intent)})")
     } catch (e: Exception) {
       ActionOutcome(false, "Firefox did not start (${e.javaClass.simpleName})")
     }
@@ -632,6 +701,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     private const val SETTLE_MS = 1500L
     private const val LAUNCH_SETTLE_MS = 3000L
     private const val MAX_PARENT_HOPS = 5
+    private const val ADDRESS_BAR_OPEN_MS = 700L
     private const val SETTINGS_PACKAGE = "com.android.settings"
 
     private val instanceFlow = MutableStateFlow<PhoneAgentAccessibilityService?>(null)

@@ -72,4 +72,16 @@ class LoopGuardTest {
     assertEquals(LoopGuard.Verdict.Continue, guard.onRefused())
     assertTrue(aborted(guard.onRefused()))
   }
+
+  @Test
+  fun aRefundedStepDoesNotCount() {
+    val guard = LoopGuard(maxSteps = 2)
+    guard.onStep()
+    guard.refund()
+    guard.onStep()
+    assertEquals(1, guard.steps)
+    assertEquals(LoopGuard.Verdict.Continue, guard.beforeStep())
+    guard.onStep()
+    assertTrue(guard.beforeStep() is LoopGuard.Verdict.Abort)
+  }
 }

@@ -239,8 +239,11 @@ fun SpikeScreen(onClose: () -> Unit) {
           Button(enabled = status == null && urlOk, onClick = { start(SpikeCommand.OpenUrl(url, privateIntent = false)) }) {
             Text("Open (ACTION_VIEW)")
           }
-          Button(enabled = status == null && urlOk, onClick = { start(SpikeCommand.OpenUrl(url, privateIntent = true)) }) {
-            Text("Open private (OPEN_PRIVATE_TAB)")
+          Button(enabled = status == null && urlOk, onClick = { start(SpikeCommand.TestOpenUrl(url)) }) {
+            Text("Test open_url")
+          }
+          OutlinedButton(enabled = status == null && urlOk, onClick = { start(SpikeCommand.OpenUrl(url, privateIntent = true)) }) {
+            Text("Open private")
           }
           OutlinedButton(enabled = status == null, onClick = { start(SpikeCommand.LaunchFirefox) }) {
             Text("Launch from service")
