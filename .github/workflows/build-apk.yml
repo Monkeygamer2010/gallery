@@ -6,6 +6,14 @@ name: Build PhoneAgent APK
 on:
   push:
     branches: ["claude/phone-agent**"]
+    # Pushes that only change docs/ or Markdown files skip the build. Everything else builds,
+    # including this workflow and the privacy checks; Markdown under Android/src (skill files
+    # packaged in the APK) builds too. A later pattern overrides an earlier one.
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!**.md"
+      - "Android/src/**"
   workflow_dispatch:
 
 permissions:

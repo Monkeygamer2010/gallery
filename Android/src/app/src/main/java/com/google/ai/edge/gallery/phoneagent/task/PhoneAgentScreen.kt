@@ -118,13 +118,16 @@ fun PhoneAgentScreen(task: Task, data: CustomTaskData) {
       }
     }
     lifecycleOwner.lifecycle.addObserver(observer)
-    PhoneAgentLaunch.screenShown = true
     ModelKeeper.onScreenShown()
     onDispose {
       lifecycleOwner.lifecycle.removeObserver(observer)
-      PhoneAgentLaunch.screenShown = false
       ModelKeeper.onScreenLeft()
     }
+  }
+  // Which model's screen is in front, for the tile. A replaced screen may leave after the new one came.
+  DisposableEffect(model.name) {
+    PhoneAgentLaunch.onScreenShown(model.name)
+    onDispose { PhoneAgentLaunch.onScreenLeft(model.name) }
   }
   // Runs and results show other apps' text: no screenshots or system capture unless allowed.
   BlockScreenCapture(!settings.allowScreenshots)
@@ -146,25 +149,26 @@ fun PhoneAgentScreen(task: Task, data: CustomTaskData) {
     else if (!setup.firefoxIsDefault) add("Make Firefox the default browser (Settings > Apps > Default apps > Browser app).")
   }
 
-  fun start(text: String) {
+  fun start(text: String, launchNote: String? = null) {
     if (blockers.isNotEmpty()) {
       Toast.makeText(context, blockers.first(), Toast.LENGTH_LONG).show()
       return
     }
     val host = activity ?: return
     val others = uiState.tasks.flatMap { it.models }.distinct().count { it.instance != null && it !== model }
-    val error = AgentRunner.start(host, model, text, thinking, otherModelsLoaded = others)
+    val error = AgentRunner.start(host, model, text, thinking, otherModelsLoaded = others, launchNote = launchNote)
     if (error != null) Toast.makeText(context, error, Toast.LENGTH_LONG).show()
   }
 
-  // A task typed in the Quick Settings popup starts once the model is ready and this screen is
-  // in front (Android only lets a visible app start the run's foreground service).
+  // A task typed in the Quick Settings popup runs on the tile's model: the navigation graph opens
+  // that model's screen first (FollowPhoneAgentRequests). It starts once the model is ready and
+  // this screen is in front (Android only lets a visible app start the run's foreground service).
   val pending by PhoneAgentLaunch.pending.collectAsState()
-  LaunchedEffect(pending, modelReady, run.active, resumed) {
-    if (pending == null || !modelReady || run.active || !resumed) return@LaunchedEffect
-    val text = PhoneAgentLaunch.take() ?: return@LaunchedEffect
-    goal = text
-    start(text)
+  LaunchedEffect(pending, modelReady, run.active, resumed, model.name) {
+    if (pending?.model != model.name || !modelReady || run.active || !resumed) return@LaunchedEffect
+    val request = PhoneAgentLaunch.take(model.name) ?: return@LaunchedEffect
+    goal = request.goal
+    start(request.goal, launchNote = request.note(model.name))
   }
 
   Column(

@@ -108,7 +108,7 @@ object AgentEngine {
 
   /** Held while an engine loads (seconds): the main thread only ever tries it. */
   private val lock = ReentrantLock()
-  private var loaded: Loaded? = null
+  @Volatile private var loaded: Loaded? = null
 
   private fun keyOf(path: String, accelerator: Accelerator, maxTokens: Int, name: String) =
     "$name|$path|${accelerator.label}|$maxTokens"
@@ -320,6 +320,12 @@ object AgentEngine {
         }
       }
     if (ours || model.instance == null) onDone() else LlmChatModelHelper.cleanUp(model = model, onDone = onDone)
+  }
+
+  /** [model]'s instance is Phone Agent's own engine, which [initialize] closes itself on a switch. */
+  fun owns(model: Model): Boolean {
+    val current = loaded
+    return current != null && model.instance === current.instance
   }
 
   /** Unloads Phone Agent's engine, if any (call it off the main thread). Returns whether one was closed. */

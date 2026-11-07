@@ -443,8 +443,11 @@ fun GalleryNavHost(
   }
 
   // PhoneAgent fork: open the Phone Agent task when its Quick Settings popup asks for it.
-  FollowPhoneAgentRequests(modelManagerViewModel) { taskId, modelName ->
-    navController.navigate("$ROUTE_MODEL/$taskId/$modelName")
+  FollowPhoneAgentRequests(modelManagerViewModel) { taskId, modelName, replaceCurrent ->
+    navController.navigate("$ROUTE_MODEL/$taskId/$modelName") {
+      // A Phone Agent screen showing another model is replaced, not stacked.
+      if (replaceCurrent) navController.currentDestination?.id?.let { popUpTo(it) { inclusive = true } }
+    }
   }
 
   // Handle incoming intents for deep links

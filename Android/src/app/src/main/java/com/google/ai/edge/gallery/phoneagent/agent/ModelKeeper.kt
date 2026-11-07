@@ -25,6 +25,7 @@ import android.os.Looper
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,7 +46,10 @@ object ModelKeeper {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private var timer: Job? = null
   @Volatile private var installed = false
-  @Volatile private var screenShown = false
+  /** Phone Agent screens shown: the tile's model replaces a screen, and the old one leaves last. */
+  private val screens = AtomicInteger(0)
+  private val screenShown: Boolean
+    get() = screens.get() > 0
   @Volatile private var appForeground = true
   private lateinit var appContext: Context
 
@@ -84,12 +88,13 @@ object ModelKeeper {
   }
 
   fun onScreenShown() {
-    screenShown = true
+    screens.incrementAndGet()
     cancelTimer()
   }
 
   fun onScreenLeft() {
-    screenShown = false
+    // Another Phone Agent screen (the tile's model) is still in front: keep its model.
+    if (screens.updateAndGet { maxOf(0, it - 1) } > 0) return
     if (running()) return
     when (settings().keepLoaded) {
       // A screen that comes straight back (rotation, font size) keeps the model.
