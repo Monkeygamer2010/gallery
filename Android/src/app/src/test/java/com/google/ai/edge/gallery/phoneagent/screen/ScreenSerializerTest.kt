@@ -80,6 +80,9 @@ private fun read(root: UiNode?, context: ScreenContext = ScreenContext(appLabel 
 
 private fun lines(read: ScreenRead) = read.elements.map { it.line() }
 
+/** The read's lines after the header ("App: Test"). */
+private fun body(read: ScreenRead) = read.text.lines().drop(1)
+
 class ScreenSerializerTest {
   @Test
   fun buttonsLinksInputsAndTextGetTheirRolesAndStates() {
@@ -96,17 +99,18 @@ class ScreenSerializerTest {
         )
       }
     }
+    // Text and headings are plain lines; only links and controls get ids.
     assertEquals(
       listOf(
-        "[1] heading \"Munich\"",
-        "[2] text \"Munich is the capital of Bavaria.\"",
-        "[3] link \"Bavaria\"",
-        "[4] input \"Search\" value=\"munich\"",
-        "[5] input \"Password\" password",
-        "[6] checkbox \"Remember me\" checked",
-        "[7] button \"Sign in\" disabled",
+        "# Munich",
+        "Munich is the capital of Bavaria.",
+        "[1] link \"Bavaria\"",
+        "[2] input \"Search\" value=\"munich\"",
+        "[3] input \"Password\" password",
+        "[4] checkbox \"Remember me\" checked",
+        "[5] button \"Sign in\" disabled",
       ),
-      lines(read(root)),
+      body(read(root)),
     )
   }
 
@@ -132,7 +136,7 @@ class ScreenSerializerTest {
         )
       }
     }
-    assertEquals(listOf("[1] text \"Shown\""), lines(read(root)))
+    assertEquals(listOf("Shown"), body(read(root)))
   }
 
   @Test
@@ -154,9 +158,29 @@ class ScreenSerializerTest {
       }
     }
     val result = read(root)
-    // The container is labelled with the start of its text; the rest stays as its own lines.
-    assertEquals(listOf("button", "text"), result.elements.map { it.role })
-    assertTrue(result.text.contains("Second paragraph"))
+    // In an app, the container is labelled with the start of its text; the rest stays as its own lines.
+    assertEquals(listOf("button"), result.elements.map { it.role })
+    assertTrue(result.text.contains("\nSecond paragraph"))
+  }
+
+  @Test
+  fun onAPageAClickableContainerOrADomIdIsNotAnElement() {
+    val paragraph = "A long paragraph of article text that goes on and on. ".repeat(3)
+    val root = tree {
+      node(className = ScreenSerializer.WEB_VIEW_CLASS, bounds = SCREEN) {
+        listOf(
+          node(viewId = "mw-content-text", clickable = true, bounds = SCREEN) { listOf(node(text = paragraph, bounds = SCREEN)) },
+          node(viewId = "toc-toggle", clickable = true, bounds = SCREEN),
+          node(viewId = "searchInput", className = "android.widget.EditText", editable = true, bounds = SCREEN),
+        )
+      }
+    }
+    val result = read(root)
+    // The container's text stays; the container, the unnamed button and the DOM ids don't.
+    assertEquals(listOf("[1] input empty"), lines(result))
+    assertTrue(result.text.contains(paragraph.trim()))
+    assertFalse(result.text.contains("mw-content-text") || result.text.contains("toc") || result.text.contains("searchInput"))
+    assertEquals(2, result.diagnostics.dropped[DropReason.NO_LABEL])
   }
 
   @Test
@@ -173,10 +197,7 @@ class ScreenSerializerTest {
         )
       }
     }
-    assertEquals(
-      listOf("[1] text \"Results\"", "[2] button \"Share\"", "[3] text \"x\"", "[4] button \"Share\""),
-      lines(read(root)),
-    )
+    assertEquals(listOf("Results", "[1] button \"Share\"", "x", "[2] button \"Share\""), body(read(root)))
   }
 
   @Test
@@ -191,11 +212,12 @@ class ScreenSerializerTest {
       }
     }
     val result = read(root)
-    assertEquals("[1] text \"two lines 'quoted'\"", result.elements[0].line())
-    // Text lines keep up to 400 characters (answers sit deep in paragraphs); element labels 100.
-    assertEquals(ScreenSerializer.MAX_TEXT_CHARS, result.elements[1].label.length)
-    assertTrue(result.elements[1].label.endsWith("…"))
-    assertEquals(ScreenSerializer.MAX_LABEL_CHARS, result.elements[2].label.length)
+    val lines = body(result)
+    assertEquals("two lines 'quoted'", lines[0])
+    // Text keeps up to 400 characters per node (answers sit deep in paragraphs); element labels 100.
+    assertEquals(ScreenSerializer.MAX_TEXT_CHARS, lines[1].length)
+    assertTrue(lines[1].endsWith("…"))
+    assertEquals(ScreenSerializer.MAX_LABEL_CHARS, result.elements.single().label.length)
   }
 
   @Test
@@ -204,8 +226,8 @@ class ScreenSerializerTest {
     val result = read(root, budget = 200)
     assertTrue(result.truncated)
     assertTrue(result.estimatedTokens <= 200)
-    assertEquals(300, result.totalElements)
-    assertTrue(result.text.contains("(${300 - result.elements.size} more elements not shown"))
+    assertEquals(300, result.totalLines)
+    assertTrue(result.text.contains("(${300 - result.lines} more lines not shown"))
   }
 
   @Test
@@ -268,16 +290,17 @@ class IdMappingTest {
   @Test
   fun idsAreSequentialAndPointAtTheRightNodes() {
     val result = read(root)
-    assertEquals(listOf(1, 2, 3), result.elements.map { it.id })
-    assertEquals(listOf(1, 2, 4), result.elements.map { it.nodeKey })
-    assertEquals("button \"Cancel\"", result.element(3)?.signature)
+    // "Title" is text: it gets no id.
+    assertEquals(listOf(1, 2), result.elements.map { it.id })
+    assertEquals(listOf(2, 4), result.elements.map { it.nodeKey })
+    assertEquals("button \"Cancel\"", result.element(2)?.signature)
   }
 
   @Test
   fun unknownIdsResolveToNothing() {
     val result = read(root)
     assertNull(result.element(0))
-    assertNull(result.element(4))
+    assertNull(result.element(3))
     assertNull(result.element(-1))
   }
 
@@ -307,6 +330,6 @@ class IdMappingTest {
       }
     }
     val after = read(changed)
-    assertFalse(before.element(2)?.signature == after.element(2)?.signature)
+    assertFalse(before.element(1)?.signature == after.element(1)?.signature)
   }
 }

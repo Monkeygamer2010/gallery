@@ -48,6 +48,7 @@ import com.google.ai.edge.gallery.phoneagent.screen.Element
 import com.google.ai.edge.gallery.phoneagent.screen.ScreenContext
 import com.google.ai.edge.gallery.phoneagent.screen.ScreenRead
 import com.google.ai.edge.gallery.phoneagent.screen.ScreenSerializer
+import com.google.ai.edge.gallery.phoneagent.screen.TreeJson
 import com.google.ai.edge.gallery.phoneagent.screen.forEachNode
 import com.google.ai.edge.gallery.phoneagent.spike.ReadSummary
 import com.google.ai.edge.gallery.phoneagent.spike.SpikeActivity
@@ -163,7 +164,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         val outcome =
           when {
             read == null -> "Not read: ${view.refusal}"
-            !view.pageArea -> "No web page on screen (${read.elements.size} ids, about ${read.estimatedTokens} tokens)"
+            !view.pageArea -> "No web page on screen (${read.lines} lines, ${read.elements.size} ids, about ${read.estimatedTokens} tokens)"
             view.pageWithoutContent -> "PROBLEM: a web page is on screen but none of its text is in the observation"
             else ->
               "Page content: yes (${read.pageLines} lines from the page, ${read.elements.size} ids, " +
@@ -268,7 +269,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     val summary: ReadSummary?,
   ) {
     fun outcome(): String =
-      "Read ${read.elements.size} of ${read.totalElements} elements, about ${read.estimatedTokens} tokens"
+      "Read ${read.lines} of ${read.totalLines} lines (${read.elements.size} ids), about ${read.estimatedTokens} tokens"
   }
 
   private suspend fun snapshot(): Snapshot =
@@ -294,7 +295,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
       val elapsed = SystemClock.elapsedRealtime() - start
       val stats =
         "Nodes read: ${tree?.nodes?.size ?: 0}${if (tree?.truncated == true) " (stopped at the limit)" else ""}\n" +
-          "Elements: ${read.elements.size} shown of ${read.totalElements}" +
+          "Lines: ${read.lines} shown of ${read.totalLines}, ids: ${read.elements.size}" +
           (if (read.pageArea) " (${read.pageLines} from the web page)" else "") + "\n" +
           "Tokens (estimate): ${read.estimatedTokens} shown, ${uncapped.estimatedTokens} for the whole viewport\n" +
           "Read time: $elapsed ms"
@@ -319,6 +320,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
             signatures = read.elements.associate { it.id to it.signature },
             diagnostics =
               listOfNotNull(tree?.summary(), read.diagnostics.report()).joinToString("\n"),
+            tree = tree?.root?.let { TreeJson.write(it) },
           ),
       )
     }
@@ -331,12 +333,13 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
       compact = view.modelText,
       details = view.classification(),
       stats =
-        "Ids: ${read?.elements?.size ?: 0}, page lines: ${view.pageLines}\n" +
+        "Lines: ${read?.lines ?: 0} (${view.pageLines} from the page), ids: ${read?.elements?.size ?: 0}\n" +
           "Tokens (estimate): ${read?.estimatedTokens ?: 0}\n" +
           "Read time: ${obs.readMs} ms",
       browser = view.browser?.let { describe(it) },
       signatures = read?.elements?.associate { it.id to it.signature }.orEmpty(),
       diagnostics = listOfNotNull(view.converter, read?.diagnostics?.report()).joinToString("\n"),
+      tree = obs.snapshot?.root?.let { TreeJson.write(it) },
     )
   }
 

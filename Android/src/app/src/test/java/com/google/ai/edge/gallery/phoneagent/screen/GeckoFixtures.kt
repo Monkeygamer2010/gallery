@@ -31,6 +31,8 @@ class FakeNode(
   val password: Boolean = false,
   val heading: Boolean = false,
   val scrollActions: Boolean = false,
+  val focused: Boolean = false,
+  val selected: Boolean = false,
   val children: List<FakeNode> = emptyList(),
 )
 
@@ -63,6 +65,8 @@ object FakeAccess : NodeAccess<FakeNode> {
       editable = node.editable,
       password = node.password,
       heading = node.heading,
+      focused = node.focused,
+      selected = node.selected,
       visible = node.visible,
       scrollable = node.scrollActions,
       canScrollForward = node.scrollActions,
@@ -85,7 +89,7 @@ object GeckoFixtures {
   const val LEAD =
     "The University of Bologna is a public research university in Bologna, Italy. Teaching began around 1088."
 
-  private fun toolbar(url: String = URL, private: Boolean = true, tabs: Int = 5): FakeNode =
+  internal fun toolbar(url: String = URL, private: Boolean = true, tabs: Int = 5): FakeNode =
     FakeNode(
       className = "android.view.View",
       bounds = Bounds(0, 80, 1080, 220),

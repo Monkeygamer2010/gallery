@@ -63,6 +63,8 @@ data class ReadSummary(
   val signatures: Map<Int, String>,
   /** How nodes were classified: counts per drop reason and raw properties of dropped nodes. */
   val diagnostics: String = "",
+  /** The converted tree as JSON ([com.google.ai.edge.gallery.phoneagent.screen.TreeJson]), for "Copy tree". */
+  val tree: String? = null,
 )
 
 data class SpikeEntry(

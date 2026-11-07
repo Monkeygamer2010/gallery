@@ -89,10 +89,10 @@ data class Observation(
     return buildString {
       append(facts.appLabel ?: facts.packageName ?: "unknown app")
       url?.let { append(", ").append(it) }
-      append(": ").append(r.elements.size).append(" elements")
-      if (r.pageArea) append(" (").append(r.pageLines).append(" from the page)") else append(" (no web page)")
+      append(": ").append(r.lines).append(" lines, ").append(r.elements.size).append(" ids")
+      if (r.pageArea) append(" (").append(r.pageLines).append(" lines from the page)") else append(" (no web page)")
       append(", about ").append(r.estimatedTokens).append(" tokens")
-      if (r.truncated) append(", ").append(r.totalElements - r.elements.size).append(" over the cap")
+      if (r.truncated) append(", ").append(r.totalLines - r.lines).append(" lines over the cap")
     }
   }
 

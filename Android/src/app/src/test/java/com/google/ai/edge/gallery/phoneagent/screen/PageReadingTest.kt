@@ -55,10 +55,13 @@ class PageReadingTest {
   fun pageTextLinksAndInputsReachTheReadAlthoughThePageSaysNotVisible() {
     val result = read(GeckoFixtures.wikipediaArticle())
     val text = result.text
-    assertTrue(text, text.contains("heading \"University of Bologna\""))
-    assertTrue(text, text.contains("Teaching began around 1088."))
-    assertTrue(text, text.contains("link \"Bologna\""))
-    assertTrue(text, text.contains("text \"Motto: Alma mater studiorum\""))
+    assertTrue(text, text.contains("# University of Bologna\n"))
+    // The paragraph and its link are one line; the link keeps its id inline.
+    val bologna = result.elements.single { it.label == "Bologna" }
+    assertEquals("link", bologna.role)
+    assertTrue(bologna.inPage)
+    assertTrue(text, text.contains("${GeckoFixtures.LEAD} [${bologna.id}]Bologna\n"))
+    assertTrue(text, text.contains("\nMotto: Alma mater studiorum\n"))
     assertTrue(text, text.contains("input \"Search Wikipedia\" empty"))
     assertTrue(result.pageArea)
     assertTrue(result.pageLines >= 5)
@@ -104,7 +107,9 @@ class PageReadingTest {
     val result = read(GeckoFixtures.wikipediaArticle(), budget = 120)
     assertTrue(result.truncated)
     assertTrue(result.estimatedTokens <= 120)
-    assertTrue(result.text.contains("more elements not shown"))
+    assertTrue(result.text.contains("more lines not shown"))
+    // The toolbar keeps its share: the address bar is still there.
+    assertTrue(result.text, result.text.contains("button \"Search or enter address\""))
     assertTrue((result.diagnostics.dropped[DropReason.TOKEN_CAP] ?: 0) > 0)
   }
 

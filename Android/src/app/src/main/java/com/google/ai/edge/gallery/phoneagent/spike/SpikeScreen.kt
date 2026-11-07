@@ -302,7 +302,20 @@ private fun EntryCard(entry: SpikeEntry, context: Context) {
         Button(onClick = { copyEntry(context, entry, withDetails = false) }) { Text("Copy") }
         OutlinedButton(onClick = { copyEntry(context, entry, withDetails = true) }) { Text("Copy with details") }
       }
-      TextButton(onClick = { showDetails = !showDetails }) { Text(if (showDetails) "Hide details" else "Show details") }
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(onClick = { showDetails = !showDetails }) { Text(if (showDetails) "Hide details" else "Show details") }
+        val tree = entry.after?.tree ?: entry.before?.tree
+        if (tree != null) {
+          TextButton(
+            onClick = {
+              DeviceSetup.copy(context, tree)
+              Toast.makeText(context, "Tree copied", Toast.LENGTH_SHORT).show()
+            }
+          ) {
+            Text("Copy tree")
+          }
+        }
+      }
       entry.before?.let { ReadBlock(if (entry.after != null) "Before" else "Screen", it, showDetails) }
       entry.after?.let { ReadBlock("After", it, showDetails) }
     }
