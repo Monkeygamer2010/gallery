@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery
 
 import android.app.Application
+import android.os.Process
 import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.phoneagent.images.installOfflineImageLoader
 import com.google.ai.edge.gallery.ui.theme.ThemeSettings
@@ -27,8 +28,16 @@ import javax.inject.Inject
 class GalleryApplication : Application() {
 
   @Inject lateinit var dataStoreRepository: DataStoreRepository
+  // PhoneAgent fork: no scheduled notifications (Phase 0) and no text-to-speech (upstream sync
+  // 1.0.23: voice features are out of the build), so neither is injected or started here.
 
   override fun onCreate() {
+    // androidx.pdf parses PDFs in an isolated service process, which also instantiates this
+    // Application. Isolated processes have no access to storage or most system services (e.g.
+    // Firebase initialization crashes there), so skip all app initialization in them.
+    if (Process.isIsolated()) {
+      return
+    }
     super.onCreate()
     // Load saved theme.
     ThemeSettings.themeOverride.value = dataStoreRepository.readTheme()

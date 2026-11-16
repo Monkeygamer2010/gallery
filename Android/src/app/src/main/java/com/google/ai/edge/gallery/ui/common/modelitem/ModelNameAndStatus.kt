@@ -17,13 +17,16 @@
 package com.google.ai.edge.gallery.ui.common.modelitem
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.filled.Info
@@ -44,6 +47,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,6 +56,7 @@ import com.google.ai.edge.gallery.data.MODEL_INFO_ICON_SIZE
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelDownloadStatus
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
+import com.google.ai.edge.gallery.data.ModelType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.ui.common.ClickableLink
 import com.google.ai.edge.gallery.ui.common.humanReadableSize
@@ -64,6 +69,7 @@ import com.google.ai.edge.gallery.ui.theme.labelSmallNarrow
  * This function renders the model's name and its current download status, including:
  * - Model name.
  * - Failure message (if download failed).
+ * - Downloaded size, and why it paused, for a paused download.
  * - "Unzipping..." status for unzipping processes.
  * - Model size for successful downloads.
  */
@@ -76,12 +82,19 @@ fun ModelNameAndStatus(
   isExpanded: Boolean,
   modifier: Modifier = Modifier,
   showModelSizeAndDownloadProgressLabel: Boolean = true,
+  showBestOverallBadge: Boolean = false,
+  showLearnMore: Boolean = true,
+  collapsedSubtitle: String? = null,
+  statusContent: (@Composable () -> Unit)? = null,
 ) {
   var showUpdateDialog by remember { mutableStateOf(false) }
 
   Column(modifier = modifier) {
-    // Show "best overall" only for the first model if it is indeed the best for this task.
-    if (task != null && model.bestForTaskIds.contains(task.id) && task.models[0] == model) {
+    // Show "best overall" only for the first model if it is indeed the best for this task, or when
+    // the caller marks a model without a task (e.g. a supplementary model) as best.
+    val isBestForTask =
+      task != null && model.bestForTaskIds.contains(task.id) && task.models[0] == model
+    if (isBestForTask || showBestOverallBadge) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -158,15 +171,54 @@ fun ModelNameAndStatus(
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.weight(1f, fill = false),
       )
+      when (model.modelType) {
+        ModelType.ASR -> {
+          Box(
+            modifier =
+              Modifier.background(
+                  color = MaterialTheme.colorScheme.secondaryContainer,
+                  shape = RoundedCornerShape(6.dp),
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+          ) {
+            Text(
+              text = stringResource(R.string.model_tag_asr),
+              style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+              color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+          }
+        }
+        ModelType.TTS -> {
+          Box(
+            modifier =
+              Modifier.background(
+                  color = MaterialTheme.colorScheme.tertiaryContainer,
+                  shape = RoundedCornerShape(6.dp),
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+          ) {
+            Text(
+              text = stringResource(R.string.model_tag_tts),
+              style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+              color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+          }
+        }
+        else -> {}
+      }
     }
 
-    // Status icon + size + download progress details.
+    // Status icon + size + download progress details, unless the caller provides its own status.
+    if (statusContent != null) {
+      Box(modifier = Modifier.padding(top = 4.dp)) { statusContent() }
+    }
     val showStatusForNonDownloadable =
       downloadStatus?.status == ModelDownloadStatusType.UNAVAILABLE ||
         downloadStatus?.status == ModelDownloadStatusType.FAILED ||
         downloadStatus?.status == ModelDownloadStatusType.IN_PROGRESS
     if (
-      !model.autoDownloadsOnStartup &&
+      statusContent == null &&
+        !model.autoDownloadsOnStartup &&
         showModelSizeAndDownloadProgressLabel &&
         (model.supportsTopLevelDownload || showStatusForNonDownloadable)
     ) {
@@ -179,8 +231,8 @@ fun ModelNameAndStatus(
       )
     }
 
-    // Learn more url.
-    if (!model.downloadInfo.imported && model.learnMoreUrl.isNotEmpty()) {
+    // Learn more url or collapsed subtitle.
+    if (showLearnMore && !model.downloadInfo.imported && model.learnMoreUrl.isNotEmpty()) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -197,6 +249,13 @@ fun ModelNameAndStatus(
           textAlign = TextAlign.Left,
         )
       }
+    } else if (!showLearnMore && !collapsedSubtitle.isNullOrEmpty()) {
+      Text(
+        text = collapsedSubtitle,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+      )
     }
   }
 }
@@ -211,6 +270,8 @@ fun ModelStatusDetails(
 ) {
   val inProgress = downloadStatus?.status == ModelDownloadStatusType.IN_PROGRESS
   val isPartiallyDownloaded = downloadStatus?.status == ModelDownloadStatusType.PARTIALLY_DOWNLOADED
+  // A paused download that the user can resume or discard.
+  val isPaused = downloadStatus?.isPaused(model) == true
 
   Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
     // Status icon.
@@ -243,36 +304,39 @@ fun ModelStatusDetails(
 
       // Populate the status label.
       if (downloadStatus != null) {
-        // For in-progress model, show {receivedSize} / {totalSize} - {rate} - {remainingTime}
-        if (inProgress || isPartiallyDownloaded) {
-          if (!model.downloadsViaRepository && downloadStatus.totalBytes == 0L) {
-            sizeLabel = stringResource(R.string.cd_downloading_icon)
-          } else {
-            var totalSize = downloadStatus.totalBytes
-            if (totalSize == 0L) {
-              totalSize = model.downloadInfo.totalBytes
-            }
-            sizeLabel =
-              "${downloadStatus.receivedBytes.humanReadableSize(extraDecimalForGbAndAbove = true)} of ${totalSize.humanReadableSize()}"
-            if (downloadStatus.bytesPerSecond > 0) {
-              sizeLabel = "$sizeLabel · ${downloadStatus.bytesPerSecond.humanReadableSize()} / s"
-              // if (downloadStatus.remainingMs >= 0) {
-              //   sizeLabel =
-              //     "$sizeLabel\n${downloadStatus.remainingMs.formatToHourMinSecond()} left"
-              // }
-            }
-            if (isPartiallyDownloaded) {
-              sizeLabel = "$sizeLabel (paused)" // PhoneAgent fork: resumed only on tap
+        when {
+          // For a paused model, show {receivedSize} of {totalSize} downloaded · {reason}
+          isPaused -> {
+            sizeLabel = pausedDownloadStatusLabel(model = model, downloadStatus = downloadStatus)
+          }
+          // For in-progress model, show {receivedSize} / {totalSize} - {rate} - {remainingTime}
+          inProgress || isPartiallyDownloaded -> {
+            if (!model.downloadsViaRepository && downloadStatus.totalBytes == 0L) {
+              sizeLabel = stringResource(R.string.cd_downloading_icon)
+            } else {
+              var totalSize = downloadStatus.totalBytes
+              if (totalSize == 0L) {
+                totalSize = model.downloadInfo.totalBytes
+              }
+              sizeLabel =
+                "${downloadStatus.receivedBytes.humanReadableSize(extraDecimalForGbAndAbove = true)} of ${totalSize.humanReadableSize()}"
+              if (downloadStatus.bytesPerSecond > 0) {
+                sizeLabel = "$sizeLabel · ${downloadStatus.bytesPerSecond.humanReadableSize()} / s"
+                // if (downloadStatus.remainingMs >= 0) {
+                //   sizeLabel =
+                //     "$sizeLabel\n${downloadStatus.remainingMs.formatToHourMinSecond()} left"
+                // }
+              }
             }
           }
-        }
-        // Status for unzipping.
-        else if (downloadStatus.status == ModelDownloadStatusType.UNZIPPING) {
-          sizeLabel = "Unzipping..."
-        }
-        // Status for unavailable model.
-        else if (downloadStatus.status == ModelDownloadStatusType.UNAVAILABLE) {
-          sizeLabel = stringResource(R.string.model_unavailable_status)
+          // Status for unzipping.
+          downloadStatus.status == ModelDownloadStatusType.UNZIPPING -> {
+            sizeLabel = "Unzipping..."
+          }
+          // Status for unavailable model.
+          downloadStatus.status == ModelDownloadStatusType.UNAVAILABLE -> {
+            sizeLabel = stringResource(R.string.model_unavailable_status)
+          }
         }
       }
 
@@ -283,17 +347,40 @@ fun ModelStatusDetails(
           Text(
             line,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
+            // The reason a download paused can make its label long.
+            maxLines = if (isPaused) 2 else 1,
             style =
               MaterialTheme.typography.bodyMedium.copy(
                 // This stops numbers from "jumping around" when being updated.
                 fontFeatureSettings = "tnum"
               ),
-            overflow = TextOverflow.Visible,
+            overflow = if (isPaused) TextOverflow.Ellipsis else TextOverflow.Visible,
             modifier = Modifier.offset(y = if (index == 0) 0.dp else (-1).dp),
           )
         }
       }
     }
+  }
+}
+
+/**
+ * Returns the status label of [model]'s paused download: how much of it is downloaded, followed by
+ * why it paused when that's known, e.g. "1.20 GB of 3.66 GB downloaded · Connection lost".
+ */
+@Composable
+fun pausedDownloadStatusLabel(model: Model, downloadStatus: ModelDownloadStatus): String {
+  val totalBytes = downloadStatus.totalBytes.takeIf { it > 0L } ?: model.downloadInfo.totalBytes
+  val receivedSize =
+    downloadStatus.receivedBytes.humanReadableSize(extraDecimalForGbAndAbove = true)
+  val totalSize = totalBytes.humanReadableSize()
+  return if (downloadStatus.errorMessage.isEmpty()) {
+    stringResource(R.string.model_download_paused_status, receivedSize, totalSize)
+  } else {
+    stringResource(
+      R.string.model_download_paused_status_with_reason,
+      receivedSize,
+      totalSize,
+      downloadStatus.errorMessage,
+    )
   }
 }

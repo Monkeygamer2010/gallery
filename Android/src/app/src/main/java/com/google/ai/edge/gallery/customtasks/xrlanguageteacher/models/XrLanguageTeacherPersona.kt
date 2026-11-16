@@ -1,0 +1,337 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.ai.edge.gallery.customtasks.xrlanguageteacher.models
+
+import androidx.annotation.StringRes
+import com.google.ai.edge.gallery.R
+import java.util.Locale
+
+/**
+ * Character personas for the AR Language Teacher experience, defining voice profiles and system
+ * prompt templates. The voice preview lines are in `XrLanguageTeacherSpokenPhrases`.
+ *
+ * The voice each persona speaks with on each TTS model is in [PersonaVoices].
+ *
+ * @property id Stable identifier persisted in teacher preferences and used to key custom prompts.
+ */
+enum class CharacterPersona(
+  val id: String,
+  val displayName: String,
+  val defaultPromptTemplate: String,
+) {
+  BUDDY(
+    id = "buddy",
+    displayName = "Buddy",
+    defaultPromptTemplate =
+      """
+      You are Buddy, an enthusiastic, supportive, and friendly language teacher.
+      The student speaks {MAIN_LANGUAGE} and is learning {LEARN_LANGUAGE}.
+      Teach with warmth, encouragement, and high energy. Keep your speech concise (strictly 1 to 3 sentences total).
+      """
+        .trimIndent(),
+  ),
+  NERDY(
+    id = "nerdy",
+    displayName = "Nerdy",
+    defaultPromptTemplate =
+      """
+      You are Nerdy, an endearingly geeky language teacher who loves word origins, grammar quirks, cultural context, and fun linguistic facts.
+      The student speaks {MAIN_LANGUAGE} and is learning {LEARN_LANGUAGE}.
+      Teach with curious enthusiasm, sharing one quick fun fact when it helps (strictly 1 to 3 sentences total).
+      """
+        .trimIndent(),
+  ),
+  SECRET_AGENT(
+    id = "secret_agent",
+    displayName = "Secret Agent",
+    defaultPromptTemplate =
+      """
+      You are Secret Agent, a cool and composed spy who teaches language like a covert mission briefing.
+      The student speaks {MAIN_LANGUAGE} and is learning {LEARN_LANGUAGE}.
+      Use light spy flair such as missions, code words, and intel while keeping the lesson clear (strictly 1 to 3 sentences total).
+      """
+        .trimIndent(),
+  ),
+  WIZARD(
+    id = "wizard",
+    displayName = "Wizard",
+    defaultPromptTemplate =
+      """
+      You are Wizard, a wise and whimsical wizard who treats every new word like a magic spell.
+      The student speaks {MAIN_LANGUAGE} and is learning {LEARN_LANGUAGE}.
+      Teach with mystical, playful charm and spell-casting flair while keeping the lesson clear (strictly 1 to 3 sentences total).
+      """
+        .trimIndent(),
+  );
+
+  /**
+   * Resolves the system prompt with language placeholders substituted, visual-grounding rules
+   * cached once per session, and the Pass 1 output contract appended: a single `<reply>` block with
+   * `<target>` spans. The vocabulary card is extracted afterwards by a separate Pass 2.
+   */
+  fun buildSystemPrompt(
+    mainLangName: String,
+    learnLangName: String,
+    customTemplate: String? = null,
+  ): String {
+    val template = customTemplate?.takeIf { it.isNotBlank() } ?: defaultPromptTemplate
+    val resolvedPersona =
+      template.replace("{MAIN_LANGUAGE}", mainLangName).replace("{LEARN_LANGUAGE}", learnLangName)
+    val schemaBlock = buildReplyOnlySchemaSection(mainLangName, learnLangName)
+    return "$resolvedPersona\n\n$schemaBlock"
+  }
+
+  /**
+   * Builds the per-turn user prompt. A turn without a question (a photo only) asks the model to
+   * identify and teach the focal item; a question turn restates where `<target>` spans go.
+   * Follow-up turns always carry a question: the screen drops a follow-up when nothing was heard.
+   */
+  fun buildSingleTurnPrompt(
+    mainLangName: String,
+    learnLangName: String,
+    spokenQuestion: String? = null,
+    isFollowUp: Boolean = false,
+  ): String {
+    val question = spokenQuestion?.trim().orEmpty()
+    if (question.isEmpty()) {
+      return "Identify the focal item in $mainLangName, then teach the exact focal $learnLangName vocabulary term ${LearnLanguageNounForms.pass1TermForm(learnLangName)} followed by a complete example sentence. All conversational explanations and framing must be strictly in $mainLangName outside <target>. Wrap every single $learnLangName word or complete $learnLangName sentence inside <target>...</target>. Never place two <target> tags back-to-back without $mainLangName words between them, and never split a sentence across tags. Emit everything inside <reply>...</reply>."
+    }
+    val turnLabel = if (isFollowUp) "Follow-up" else "Student asked"
+    return "$turnLabel: \"$question\". Answer in $mainLangName outside <target> (grounding \"this\"/\"that\" to the camera object). State the focal $learnLangName noun ${LearnLanguageNounForms.pass1NounForm(learnLangName)} inside <target>...</target> in your first $mainLangName clause, then introduce one complete $learnLangName sentence inside a single unbroken <target>...</target> in the next clause (or if teaching a greeting/set phrase, wrap the complete $learnLangName phrase in one <target>...</target>). Always separate <target> tags with $mainLangName words (never back-to-back </target><target>), never split a $learnLangName sentence across tags, and never leave any $learnLangName word untagged. Start immediately with <reply>."
+  }
+
+  private fun buildReplyOnlySchemaSection(mainLangName: String, learnLangName: String): String {
+    val rules =
+      """
+      Rules:
+      1. Reply with ONLY one <reply>...</reply> block (1 to 3 short spoken sentences, no parentheses).
+      2. Ground "this"/"that" to the main object in the camera view: identify the object and teach the exact sentence the student asked to say about it (e.g., wanting it, complimenting it, or asking about it) in $learnLangName. If their question does not refer to the camera view, teach the requested phrase directly. If they ask what text in the image says or means, read it in <target>...</target> and explain its meaning in $mainLangName.
+      3. Write all $mainLangName words OUTSIDE <target>. Put ONLY $learnLangName words or complete $learnLangName sentences INSIDE <target>...</target>. Never put $mainLangName inside <target>.
+      """
+        .trimIndent()
+    // A language without its own sample gets no example, so the example never puts another
+    // language inside <target>.
+    val sampleWord = sampleTargetWord(learnLangName) ?: return rules
+    val sampleWantSentence = sampleTargetWantSentence(learnLangName) ?: return rules
+    val example =
+      """
+      Example ("${sampleStudentQuestion(mainLangName)}"):
+      <reply>
+      ${sampleHostReply(mainLangName, "<target>$sampleWord</target>", "<target>$sampleWantSentence</target>")}
+      </reply>
+      """
+        .trimIndent()
+    return "$rules\n\n$example"
+  }
+
+  /**
+   * The example student question in [mainLangName] so the 1-shot header does not prime English when
+   * [mainLangName] is another language. Unlisted native languages use English.
+   */
+  private fun sampleStudentQuestion(mainLangName: String): String =
+    when (mainLangName.lowercase(Locale.ROOT)) {
+      "japanese" -> "これは何ですか？これが欲しいと言うにはどう言えばいいですか？"
+      "korean" -> "이건 뭐예요? 이걸 갖고 싶다고 어떻게 말해요?"
+      "chinese",
+      "mandarin" -> "这是什么？想说我想要这个该怎么说？"
+      "french" -> "Qu'est-ce que c'est et comment dire que je le veux ?"
+      "german" -> "Was ist das und wie sage ich, dass ich das möchte?"
+      "italian" -> "Che cos'è questo e come dico che lo voglio?"
+      "portuguese" -> "O que é isto e como digo que eu quero isto?"
+      "spanish" -> "¿Qué es esto y cómo digo que lo quiero?"
+      "hindi" -> "यह क्या है और मैं यह कैसे कहूँ कि मुझे यह चाहिए?"
+      "thai" -> "นี่คืออะไร และจะพูดว่าอยากได้สิ่งนี้ได้อย่างไร?"
+      "vietnamese" -> "Đây là gì và làm sao để nói tôi muốn cái này?"
+      "arabic" -> "ما هذا وكيف أقول إنني أريده؟"
+      "russian" -> "Что это и как сказать, что я это хочу?"
+      else -> "What is this and how do I say I want this?"
+    }
+
+  /**
+   * The example reply, with the text outside `<target>` in [mainLangName] so it matches
+   * rule 3. [word] and [sentence] are the `<target>` spans. Unlisted native languages use English.
+   */
+  private fun sampleHostReply(mainLangName: String, word: String, sentence: String): String =
+    when (mainLangName.lowercase(Locale.ROOT)) {
+      "japanese" -> "それはマグカップです、$word！欲しいと伝えるには、${sentence}と言いましょう。"
+      "korean" -> "그건 머그컵이에요, $word! 갖고 싶다고 말하려면 ${sentence}라고 하세요."
+      "chinese",
+      "mandarin" -> "那是一个马克杯，$word！想说你想要它，可以说：$sentence"
+      "french" -> "C'est une tasse, $word ! Pour dire que tu la veux, dis : $sentence"
+      "german" -> "Das ist eine Tasse, $word! Um zu sagen, dass du sie möchtest, sag: $sentence"
+      "italian" -> "Questa è una tazza, $word! Per dire che la vuoi, di': $sentence"
+      "portuguese" -> "Isso é uma caneca, $word! Para dizer que você a quer, diga: $sentence"
+      "spanish" -> "¡Eso es una taza, $word! Para decir que la quieres, di: $sentence"
+      "hindi" -> "यह एक मग है, $word! यह कहने के लिए कि आपको यह चाहिए, कहिए: $sentence"
+      "thai" -> "นั่นคือแก้วมัค $word! ถ้าอยากบอกว่าอยากได้ ให้พูดว่า $sentence"
+      "vietnamese" -> "Đó là một cái cốc, $word! Để nói rằng bạn muốn nó, hãy nói: $sentence"
+      "arabic" -> "هذا كوب، $word! لتقول إنك تريده، قل: $sentence"
+      "russian" -> "Это кружка, $word! Чтобы сказать, что ты её хочешь, скажи: $sentence"
+      else -> "That is a mug, $word! To say you want it, say, $sentence"
+    }
+
+  private fun sampleTargetWord(learnLangName: String): String? =
+    when (learnLangName.lowercase(Locale.ROOT)) {
+      "english" -> "a mug"
+      "japanese" -> "マグカップ"
+      "korean" -> "머그컵"
+      "chinese",
+      "mandarin" -> "马克杯"
+      "french" -> "la tasse"
+      "german" -> "die Tasse"
+      "italian" -> "la tazza"
+      "portuguese" -> "a caneca"
+      "hindi" -> "मग"
+      "thai" -> "แก้วมัค"
+      "vietnamese" -> "cái cốc"
+      "arabic" -> "كوب"
+      "russian" -> "кружка"
+      "spanish" -> "la taza"
+      else -> null
+    }
+
+  private fun sampleTargetWantSentence(learnLangName: String): String? =
+    when (learnLangName.lowercase(Locale.ROOT)) {
+      "english" -> "I would like this mug, please."
+      "japanese" -> "このマグカップが欲しいです。"
+      "korean" -> "이 머그컵을 원해요."
+      "chinese",
+      "mandarin" -> "我想要这个马克杯。"
+      "french" -> "Je voudrais cette tasse, s'il vous plaît."
+      "german" -> "Ich möchte bitte diese Tasse."
+      "italian" -> "Vorrei questa tazza, per favore."
+      "portuguese" -> "Eu quero esta caneca, por favor."
+      "hindi" -> "मुझे यह मग चाहिए।"
+      "thai" -> "ฉันอยากได้แก้วมัคใบนี้ครับ"
+      "vietnamese" -> "Tôi muốn lấy cái cốc này."
+      "arabic" -> "أريد هذا الكوب من فضلك."
+      "russian" -> "Я хочу эту кружку, пожалуйста."
+      "spanish" -> "Quiero esta taza, por favor."
+      else -> null
+    }
+
+  companion object {
+    /**
+     * IDs of personas that were renamed, mapped to the persona that replaced them, so saved
+     * preferences keep a matching persona.
+     */
+    private val LEGACY_IDS: Map<String, CharacterPersona> =
+      mapOf("professor" to NERDY, "pirate" to SECRET_AGENT, "movie_narrator" to WIZARD)
+
+    /** Returns the persona with [id], migrating legacy IDs, or [BUDDY] when [id] is unknown. */
+    fun fromId(id: String?): CharacterPersona {
+      if (id.isNullOrBlank()) return BUDDY
+      return entries.firstOrNull { it.id == id } ?: LEGACY_IDS[id] ?: BUDDY
+    }
+  }
+}
+
+/** Lifecycle state of a persona voice sample preview in the Teacher settings dialog. */
+sealed interface PersonaPreviewState {
+  /** No persona voice preview is currently loading or playing. */
+  data object Idle : PersonaPreviewState
+
+  /** The TTS engine/voice is warming up before speaking [persona]'s preview line. */
+  data class Loading(val persona: CharacterPersona) : PersonaPreviewState
+
+  /** [persona]'s preview line is actively speaking. */
+  data class Playing(val persona: CharacterPersona) : PersonaPreviewState
+}
+
+/** Returns the localized display name string resource ID for the given [CharacterPersona]. */
+@StringRes
+fun CharacterPersona.displayNameResId(): Int {
+  return when (this) {
+    CharacterPersona.BUDDY -> R.string.xrteacher_persona_buddy_name
+    CharacterPersona.NERDY -> R.string.xrteacher_persona_nerdy_name
+    CharacterPersona.SECRET_AGENT -> R.string.xrteacher_persona_secret_agent_name
+    CharacterPersona.WIZARD -> R.string.xrteacher_persona_wizard_name
+  }
+}
+
+/** Returns the localized subtitle string resource ID for the given [CharacterPersona]. */
+@StringRes
+fun CharacterPersona.subtitleResId(): Int {
+  return when (this) {
+    CharacterPersona.BUDDY -> R.string.xrteacher_persona_buddy_subtitle
+    CharacterPersona.NERDY -> R.string.xrteacher_persona_nerdy_subtitle
+    CharacterPersona.SECRET_AGENT -> R.string.xrteacher_persona_secret_agent_subtitle
+    CharacterPersona.WIZARD -> R.string.xrteacher_persona_wizard_subtitle
+  }
+}
+
+/**
+ * Per-learn-language noun conventions shared by the Pass 1 turn prompts and the Pass 2 card
+ * extraction prompt.
+ *
+ * Languages with grammatical articles are taught as `article + noun` (`la taza`, `der Tisch`).
+ * Languages without articles must be taught as the bare noun: asking the 2B model for an article in
+ * Japanese or Hindi makes it attach a demonstrative instead (`このシャベル`, `यह बोतल`), which the card
+ * then shows as the vocabulary word. Evaluated on en/es/fr/it/pt (articles) and ja/hi (bare).
+ */
+internal object LearnLanguageNounForms {
+  private val ARTICLE_LESS_LANGUAGES =
+    setOf("japanese", "hindi", "korean", "chinese", "mandarin", "thai", "vietnamese", "russian")
+
+  /** Whether [learnLangName] marks nouns with a standalone grammatical article. */
+  fun hasArticles(learnLangName: String): Boolean =
+    learnLangName.lowercase(Locale.ROOT) !in ARTICLE_LESS_LANGUAGES
+
+  /** How the photo-only Pass 1 turn asks for the vocabulary term. */
+  fun pass1TermForm(learnLangName: String): String =
+    if (hasArticles(learnLangName)) {
+      "with its singular grammatical article (e.g. el/la, le/la, der/die/das, il/la, o/a)"
+    } else {
+      "as the bare noun on its own"
+    }
+
+  /** How the question Pass 1 turn asks for the focal noun. */
+  fun pass1NounForm(learnLangName: String): String =
+    if (hasArticles(learnLangName)) {
+      "with its singular article (el/la, le/la, der/die/das, il/la, o/a)"
+    } else {
+      "on its own (the bare noun only)"
+    }
+
+  /** The `word` rule of the Pass 2 card prompt, up to and excluding the carrier-phrase sentence. */
+  fun pass2WordRule(learnLangName: String): String =
+    if (hasArticles(learnLangName)) {
+      "The isolated focal $learnLangName noun taught in the reply, always written with its singular definite article (Spanish el/la, French le/la/l', German der/die/das, Italian il/lo/la/l', Portuguese o/a) whenever $learnLangName has gendered articles (convert indefinite articles like un/una/une/ein/uma to el/la/le/der/o/a)."
+    } else {
+      "The isolated focal $learnLangName noun taught in the reply, written as the bare noun only (e.g. \"シャベル\", not \"このシャベル\"; \"बोतल\", not \"यह बोतल\")."
+    }
+
+  /**
+   * A contrastive `example` illustration for the Pass 2 card prompt: a sentence that contains the
+   * noun versus the pronoun sentence the model tends to copy from the reply. Empty for languages
+   * without a curated illustration.
+   */
+  fun pass2ExampleContrast(learnLangName: String): String {
+    val pair =
+      when (learnLangName.lowercase(Locale.ROOT)) {
+        "english" -> "for \"the key\": \"This is the key.\", not \"What is this?\""
+        "spanish" -> "for \"la llave\": \"Esta es la llave.\", not \"¿Qué es esto?\""
+        "french" -> "for \"le clavier\": \"Le clavier est cassé.\", not \"C'est cassé.\""
+        "italian" -> "for \"la chiave\": \"Questa è la chiave.\", not \"Che cos'è questo?\""
+        "portuguese" -> "for \"a chave\": \"Esta é a chave.\", not \"O que é isso?\""
+        "japanese" -> "for \"ナイフ\": \"これはナイフです。\", not \"これを持っていますか？\""
+        "hindi" -> "for \"चाबी\": \"यह चाबी है।\", not \"यह क्या है?\""
+        else -> return ""
+      }
+    return " (e.g. $pair)"
+  }
+}

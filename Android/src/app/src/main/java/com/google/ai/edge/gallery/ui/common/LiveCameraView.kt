@@ -18,7 +18,6 @@ package com.google.ai.edge.gallery.ui.common
 
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.util.Log
@@ -36,12 +35,12 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,8 +55,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.ai.edge.gallery.R
 import kotlinx.coroutines.Dispatchers
@@ -77,17 +77,27 @@ fun LiveCameraView(
   onError: (() -> Unit)? = null,
   fallBackToAvailableCamera: Boolean = false,
   skipFramesWhilePaused: Boolean = false,
+  onPermissionDeniedChanged: (Boolean) -> Unit = {},
+  permissionDeniedContent: (@Composable () -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val lifecycleOwner = LocalLifecycleOwner.current
+  val flowTrackerVersion by PermissionAccessTracker.observeStateVersion(context).collectAsState()
+  val snapshotTrackerVersion = PermissionAccessTracker.currentStateVersion(context)
   var imageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
   var cameraProvider: ProcessCameraProvider? by remember { mutableStateOf(null) }
+  var isPermissionDenied by remember {
+    mutableStateOf(PermissionAccessTracker.isPermissionDenied(context, PermissionAccessKind.CAMERA))
+  }
 
   val currentOnBitmap by rememberUpdatedState(onBitmap)
   val currentIsPaused by rememberUpdatedState(isPaused)
   val currentSkipFramesWhilePaused by rememberUpdatedState(skipFramesWhilePaused)
   val currentOnError by rememberUpdatedState(onError)
+  val currentOnPermissionDeniedChanged by rememberUpdatedState(onPermissionDeniedChanged)
+
+  LaunchedEffect(isPermissionDenied) { currentOnPermissionDeniedChanged(isPermissionDenied) }
 
   val onBitmapFn: (Bitmap, ImageProxy) -> Unit = { bitmap, imageProxy ->
     if (!currentIsPaused) {
@@ -96,10 +106,49 @@ fun LiveCameraView(
     currentOnBitmap(bitmap, imageProxy)
   }
 
+  fun syncCameraPermissionState() {
+    when {
+      PermissionAccessTracker.isPermissionGranted(context, PermissionAccessKind.CAMERA) -> {
+        if (isPermissionDenied) {
+          isPermissionDenied = false
+          scope.launch {
+            cameraProvider =
+              startCamera(
+                context = context,
+                lifecycleOwner = lifecycleOwner,
+                onBitmap = onBitmapFn,
+                preferredSize = preferredSize,
+                outputImageFormat = outputImageFormat,
+                cameraSelector = cameraSelector,
+                fallBackToAvailableCamera = fallBackToAvailableCamera,
+                shouldSkipFrame = { currentSkipFramesWhilePaused && currentIsPaused },
+                onError = currentOnError,
+              )
+          }
+        }
+      }
+      PermissionAccessTracker.isPermissionDenied(context, PermissionAccessKind.CAMERA) -> {
+        cameraProvider?.unbindAll()
+        cameraProvider = null
+        imageBitmap = null
+        isPermissionDenied = true
+      }
+    }
+  }
+
   val liveCameraPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
       permissionGranted ->
-      if (permissionGranted) {
+      PermissionAccessTracker.onPermissionResult(
+        context,
+        Manifest.permission.CAMERA,
+        permissionGranted,
+      )
+      val effectiveGranted =
+        permissionGranted &&
+          PermissionAccessTracker.isPermissionGranted(context, PermissionAccessKind.CAMERA)
+      isPermissionDenied = !effectiveGranted
+      if (effectiveGranted) {
         scope.launch {
           cameraProvider =
             startCamera(
@@ -118,10 +167,9 @@ fun LiveCameraView(
     }
 
   LaunchedEffect(cameraSelector) {
-    // Check permission.
-    when (PackageManager.PERMISSION_GRANTED) {
-      // Already got permission. Call the lambda.
-      ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) -> {
+    when {
+      PermissionAccessTracker.isPermissionGranted(context, PermissionAccessKind.CAMERA) -> {
+        isPermissionDenied = false
         cameraProvider =
           startCamera(
             context = context,
@@ -135,19 +183,27 @@ fun LiveCameraView(
             onError = currentOnError,
           )
       }
-
-      // Otherwise, ask for permission
+      PermissionAccessTracker.isPermissionDenied(context, PermissionAccessKind.CAMERA) -> {
+        cameraProvider?.unbindAll()
+        cameraProvider = null
+        imageBitmap = null
+        isPermissionDenied = true
+      }
       else -> {
         liveCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
       }
     }
   }
 
+  LaunchedEffect(flowTrackerVersion, snapshotTrackerVersion) { syncCameraPermissionState() }
+
+  LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { syncCameraPermissionState() }
+
   DisposableEffect(Unit) { onDispose { cameraProvider?.unbindAll() } }
 
   // Camera live view.
   if (renderPreview) {
-    Row(modifier = modifier.background(Color.Black), horizontalArrangement = Arrangement.Center) {
+    Box(modifier = modifier.background(Color.Black)) {
       val ib = imageBitmap
       if (ib != null) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -183,6 +239,9 @@ fun LiveCameraView(
             dstSize = IntSize(dstRect.width.toInt(), dstRect.height.toInt()),
           )
         }
+      }
+      if (isPermissionDenied) {
+        permissionDeniedContent?.invoke()
       }
     }
   }

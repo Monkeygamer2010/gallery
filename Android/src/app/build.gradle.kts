@@ -35,8 +35,11 @@ android {
     applicationId = "io.github.monkeygamer2010.phoneagent"
     minSdk = 31
     targetSdk = 37
+    // PhoneAgent fork: versionCode stays 46, the code every PhoneAgent build has had, so builds
+    // of any branch install over each other in both directions (Android refuses a lower code,
+    // and upstream's 52 would block going back). versionName is upstream's tag plus our suffix.
     versionCode = 46
-    versionName = "1.0.20"
+    versionName = "1.0.23-phoneagent.1"
 
     // Needed for HuggingFace auth workflows.
     // Use the scheme of the "Redirect URLs" in HuggingFace app.
@@ -128,6 +131,11 @@ dependencies {
   implementation(libs.androidx.media3.transformer)
   implementation(libs.androidx.media3.ui)
   implementation(libs.coil.compose)
+  // PhoneAgent fork, upstream sync 1.0.23: upstream also adds XR "projected", five ML Kit GenAI
+  // libraries and MediaPipe tasks-audio here. They serve the XR language teacher and the voice
+  // features, which are out of the build (phoneagent-excluded-sources.txt), so they are left out.
+  implementation(libs.androidx.pdf.core)
+  implementation(libs.androidx.pdf.document.service)
 }
 
 configurations.all { resolutionStrategy.force("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.0") }

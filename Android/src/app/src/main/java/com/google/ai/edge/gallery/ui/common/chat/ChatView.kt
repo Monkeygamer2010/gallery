@@ -91,6 +91,7 @@ import com.google.ai.edge.gallery.ui.common.ModelPageAppBar
 import com.google.ai.edge.gallery.ui.common.copyBitmapToClipboard
 import com.google.ai.edge.gallery.ui.common.saveBitmapToMediaStore
 import com.google.ai.edge.gallery.ui.common.shareBitmap
+import com.google.ai.edge.gallery.ui.common.tts.rememberChatTtsController
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -132,6 +133,7 @@ fun ChatView(
   composableBelowMessageList: @Composable (Model) -> Unit = {},
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  showTextFilePicker: Boolean = false,
   emptyStateComposable: @Composable (Model) -> Unit = {},
   allowEditingSystemPrompt: Boolean = false,
   curSystemPrompt: String = "",
@@ -146,6 +148,8 @@ fun ChatView(
   var selectedImageIndex by remember { mutableIntStateOf(-1) }
   var allImageViewerImages by remember { mutableStateOf<List<Bitmap>>(listOf()) }
   var showImageViewer by remember { mutableStateOf(false) }
+  // File viewer related.
+  var viewedFile by remember { mutableStateOf<ChatMessageFile?>(null) }
   val snackbarHostState = remember { SnackbarHostState() }
 
   // Chat history drawer.
@@ -156,18 +160,8 @@ fun ChatView(
 
   val context = LocalContext.current
 
-  val currentMessages = uiState.messagesByModel[selectedModel.name] ?: emptyList()
-  LaunchedEffect(uiState.inProgress, uiState.isResettingSession) {
-    if (!uiState.inProgress && !uiState.isResettingSession && currentMessages.isNotEmpty()) {
-      viewModel.saveSession(
-        sessionId = viewModel.currentSessionId,
-        messages = currentMessages,
-        originalModel = selectedModel.name,
-        taskId = task.id,
-        context = context,
-      )
-    }
-  }
+  val ttsController = rememberChatTtsController(context)
+
   val scope = rememberCoroutineScope()
   var navigatingUp by remember { mutableStateOf(false) }
 
@@ -234,19 +228,23 @@ fun ChatView(
                     },
                   )
 
+                  ttsController?.stop()
+
                   onRestoreSessionClicked(session)
                 }
                 scope.launch { drawerState.close() }
               },
               onHistoryItemDeleted = { sessionId ->
                 val wasActiveSession = (sessionId == viewModel.currentSessionId)
-                viewModel.deleteSession(sessionId, context)
+                viewModel.deleteSession(sessionId)
                 if (wasActiveSession) {
+                  ttsController?.stop()
                   onNewChatClicked()
                 }
               },
               onHistoryItemsDeleteAll = {
-                viewModel.clearAllSessions(context)
+                viewModel.clearAllSessions()
+                ttsController?.stop()
                 onNewChatClicked()
                 scope.launch { drawerState.close() }
               },
@@ -264,6 +262,8 @@ fun ChatView(
                     putString("model_version", selectedModel.downloadInfo.version)
                   },
                 )
+
+                ttsController?.stop()
 
                 onNewChatClicked()
                 scope.launch { drawerState.close() }
@@ -288,17 +288,11 @@ fun ChatView(
               modelManagerViewModel = modelManagerViewModel,
               inProgress = uiState.inProgress,
               modelPreparing = uiState.preparing,
+              actionsDisabled = drawerState.isOpen,
               shouldShowHistoryButton = true,
               isAutoCompactEnabled = isAutoCompactEnabled,
               onConfigChanged = { old, new ->
                 val isContextCompactSupported = task.isContextCompactSupported(selectedModel)
-                if (isContextCompactSupported) {
-                  val oldAutoCompact = old[ConfigKeys.ENABLE_AUTO_CONTEXT_COMPACT.label] as? Boolean
-                  val newAutoCompact = new[ConfigKeys.ENABLE_AUTO_CONTEXT_COMPACT.label] as? Boolean
-                  if (newAutoCompact != null && newAutoCompact != oldAutoCompact) {
-                    viewModel.setAutoCompact(task.id, newAutoCompact)
-                  }
-                }
                 // Filter out config values that are not relevant to the task.
                 //
                 // - The "reset conversation turn count" is only valid for tiny garden task.
@@ -321,6 +315,19 @@ fun ChatView(
                   newConfigValues = filteredNew,
                   model = selectedModel,
                 )
+                if (isContextCompactSupported) {
+                  val oldAutoCompact = old[ConfigKeys.ENABLE_AUTO_CONTEXT_COMPACT.label] as? Boolean
+                  val newAutoCompact = new[ConfigKeys.ENABLE_AUTO_CONTEXT_COMPACT.label] as? Boolean
+                  if (newAutoCompact != null && newAutoCompact != oldAutoCompact) {
+                    viewModel.setAutoCompact(
+                      taskId = task.id,
+                      enabled = newAutoCompact,
+                      model = selectedModel,
+                      compactIfLimitReached = true,
+                      source = AutoCompactionEnableSource.SETTINGS,
+                    )
+                  }
+                }
               },
               onBackClicked = { handleNavigateUp() },
               onModelSelected = { prevModel, curModel ->
@@ -397,14 +404,17 @@ fun ChatView(
                         allImageViewerImages = bitmaps
                         showImageViewer = true
                       },
+                      onFileSelected = { file -> viewedFile = file },
                       onSkillClicked = onSkillClicked,
                       onMcpClicked = onMcpClicked,
                       modifier = Modifier.weight(1f),
                       showStopButtonInInputWhenInProgress = showStopButtonInInputWhenInProgress,
                       showImagePicker = showImagePicker,
                       showAudioPicker = showAudioPicker,
+                      showTextFilePicker = showTextFilePicker,
                       emptyStateComposable = emptyStateComposable,
                       onNewChatClicked = onNewChatClicked,
+                      ttsController = ttsController,
                     )
                   // Model download
                   false ->
@@ -415,6 +425,11 @@ fun ChatView(
                     )
                 }
               }
+            }
+
+            // File viewer.
+            viewedFile?.let { file ->
+              FileViewer(file = file, onDismissRequest = { viewedFile = null })
             }
 
             // Image viewer.

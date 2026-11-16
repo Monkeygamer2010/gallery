@@ -196,6 +196,8 @@
         <meta-data
             android:name="android.webkit.WebView.EnableSafeBrowsing"
             android:value="false" />
+        <!-- PhoneAgent fork, upstream sync 1.0.23: upstream's GlassesTapActivity (XR Language
+             Teacher) is not declared; that feature is out of the build. -->
         <uses-native-library android:name="libvndksupport.so" android:required="false"/>
         <uses-native-library android:name="libOpenCL.so" android:required="false"/>
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
@@ -204,4 +206,7 @@
         <uses-native-library android:name="libedgetpu_client.google.so" android:required="false"/>
     </application>
 
+    <!-- PhoneAgent fork, upstream sync 1.0.23: upstream's package-visibility entries for
+         text-to-speech engines and the XR glasses service are not declared; the voice features and
+         the XR Language Teacher are out of the build. -->
 </manifest>

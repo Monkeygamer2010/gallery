@@ -16,16 +16,14 @@
 
 package com.google.ai.edge.gallery.ui.common.chat
 
-import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.compose.ui.graphics.asImageBitmap
+import com.google.ai.edge.gallery.agent.sessions.LlmSessionManager
 import com.google.ai.edge.gallery.proto.AudioMessageProto
 import com.google.ai.edge.gallery.proto.ChatMessageProto
 import com.google.ai.edge.gallery.proto.ChatSideProto
 import java.io.File
-import java.io.FileOutputStream
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
@@ -82,6 +80,17 @@ object ChatMessageMapper {
             isMarkdown = protoMsg.isMarkdown,
             accelerator = protoMsg.accelerator,
             hideSenderLabel = protoMsg.hideSenderLabel,
+          )
+        "FILE" ->
+          ChatMessageFile(
+            name = protoMsg.fileName.ifEmpty { "file" },
+            content = protoMsg.content,
+            sizeString = protoMsg.fileSizeString,
+            side = side,
+            latencyMs = protoMsg.latencyMs,
+            accelerator = protoMsg.accelerator,
+            hideSenderLabel = protoMsg.hideSenderLabel,
+            persistedPath = protoMsg.filePath.ifEmpty { null },
           )
         "THINKING" ->
           ChatMessageThinking(
@@ -177,7 +186,7 @@ object ChatMessageMapper {
    *
    * @param msg The domain chat message to serialize.
    * @param sessionId Unique identifier for the active session (used for cache file naming).
-   * @param context Optional Android [Context] for persisting media to the local cache dir.
+   * @param sessionManager Optional [LlmSessionManager] for persisting media to the local cache dir.
    * @param dispatcher The coroutine dispatcher for background I/O operations (defaults to
    *   [Dispatchers.IO]).
    * @return The built [ChatMessageProto], or null if unsupported.
@@ -185,11 +194,10 @@ object ChatMessageMapper {
   suspend fun serializeMessage(
     msg: ChatMessage,
     sessionId: String,
-    context: Context? = null,
+    sessionManager: LlmSessionManager? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
   ): ChatMessageProto? =
     withContext(dispatcher) {
-      val now = System.currentTimeMillis()
       val builder = ChatMessageProto.newBuilder()
       when (msg) {
         is ChatMessageText -> {
@@ -211,6 +219,29 @@ object ChatMessageMapper {
             .setAccelerator(msg.accelerator)
             .setHideSenderLabel(msg.hideSenderLabel)
         }
+        is ChatMessageFile -> {
+          builder
+            .setMessageType("FILE")
+            .setContent(msg.content)
+            .setFileName(msg.name)
+            .setFileSizeString(msg.sizeString)
+            .setSide(mapChatSide(msg.side))
+            .setLatencyMs(msg.latencyMs)
+            .setAccelerator(msg.accelerator)
+            .setHideSenderLabel(msg.hideSenderLabel)
+          msg.persistenceMutex.withLock {
+            val cachedPath = msg.persistedPath
+            val localPath = msg.localPath
+            if (cachedPath != null) {
+              builder.setFilePath(cachedPath)
+            } else if (sessionManager != null && localPath != null) {
+              sessionManager.cacheSessionFile(sessionId, localPath)?.let { path ->
+                msg.persistedPath = path
+                builder.setFilePath(path)
+              }
+            }
+          }
+        }
         is ChatMessageInfo -> {
           builder.setMessageType("INFO").setContent(msg.content).setSide(mapChatSide(msg.side))
         }
@@ -226,22 +257,10 @@ object ChatMessageMapper {
             val cachedPaths = msg.persistedPaths
             if (cachedPaths != null) {
               builder.addAllImageFilePaths(cachedPaths)
-            } else if (context != null) {
-              msg.persistedPaths = buildList {
-                msg.bitmaps.forEachIndexed { index, bitmap ->
-                  val fileName = "img_${sessionId}_${now}_$index.png"
-                  val file = File(context.cacheDir, fileName)
-                  try {
-                    FileOutputStream(file).use { fos ->
-                      bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
-                    }
-                    add(file.absolutePath)
-                    builder.addImageFilePaths(file.absolutePath)
-                  } catch (e: Exception) {
-                    Log.e(TAG, "Failed to serialize image to ${file.absolutePath}: ${e.message}", e)
-                  }
-                }
-              }
+            } else if (sessionManager != null) {
+              val paths = sessionManager.cacheSessionImages(sessionId, msg.bitmaps)
+              msg.persistedPaths = paths
+              builder.addAllImageFilePaths(paths)
             }
           }
         }
@@ -259,24 +278,15 @@ object ChatMessageMapper {
                   .setSampleRate(msg.sampleRate)
                   .build()
               builder.addAudioClips(audioProto)
-            } else if (context != null) {
-              val fileName = "audio_${sessionId}_$now.pcm"
-              val file = File(context.cacheDir, fileName)
-              try {
-                FileOutputStream(file).use { fos -> fos.write(msg.audioData) }
-                msg.persistedPath = file.absolutePath
+            } else if (sessionManager != null) {
+              sessionManager.cacheSessionAudio(sessionId, msg.audioData)?.let { path ->
+                msg.persistedPath = path
                 val audioProto =
                   AudioMessageProto.newBuilder()
-                    .setFilePath(file.absolutePath)
+                    .setFilePath(path)
                     .setSampleRate(msg.sampleRate)
                     .build()
                 builder.addAudioClips(audioProto)
-              } catch (e: Exception) {
-                Log.e(
-                  TAG,
-                  "Failed to serialize audio clip to ${file.absolutePath}: ${e.message}",
-                  e,
-                )
               }
             }
           }
@@ -292,7 +302,7 @@ object ChatMessageMapper {
    *
    * @param messages List of messages to serialize.
    * @param sessionId Unique identifier for the active session.
-   * @param context Optional Android [Context] for media file caching.
+   * @param sessionManager Optional [LlmSessionManager] for media file caching.
    * @param dispatcher The coroutine dispatcher for background I/O operations (defaults to
    *   [Dispatchers.IO]).
    * @return List of protobuf messages.
@@ -300,10 +310,10 @@ object ChatMessageMapper {
   suspend fun serializeMessages(
     messages: List<ChatMessage>,
     sessionId: String,
-    context: Context? = null,
+    sessionManager: LlmSessionManager? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
   ): List<ChatMessageProto> =
     withContext(dispatcher) {
-      messages.mapNotNull { serializeMessage(it, sessionId, context, dispatcher) }
+      messages.mapNotNull { serializeMessage(it, sessionId, sessionManager, dispatcher) }
     }
 }

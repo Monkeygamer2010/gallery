@@ -20,7 +20,6 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.hardware.Sensor
@@ -28,6 +27,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -46,6 +46,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -70,6 +72,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.InsertChart
@@ -80,6 +83,7 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -87,12 +91,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.IconToggleButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -101,11 +106,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -117,6 +124,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -127,6 +135,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.common.AudioClip
+import com.google.ai.edge.gallery.common.TextFile
 import com.google.ai.edge.gallery.common.convertWavToMonoWithMaxSeconds
 import com.google.ai.edge.gallery.common.decodeSampledBitmapFromUri
 import com.google.ai.edge.gallery.common.openSafeInputStream
@@ -137,18 +146,32 @@ import com.google.ai.edge.gallery.data.MAX_IMAGE_COUNT_AI_CORE
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.SAMPLE_RATE
 import com.google.ai.edge.gallery.data.Task
+import com.google.ai.edge.gallery.ui.common.PermissionAccessKind
+import com.google.ai.edge.gallery.ui.common.PermissionAccessTracker
+import com.google.ai.edge.gallery.ui.common.PermissionDeniedDialog
+import com.google.ai.edge.gallery.ui.common.SandboxedPdf
+import com.google.ai.edge.gallery.ui.common.asr.ChatAsrDictationPanel
+import com.google.ai.edge.gallery.ui.common.asr.ChatAsrDictationUiState
+import com.google.ai.edge.gallery.ui.common.asr.rememberChatAsrDictationActions
 import com.google.ai.edge.gallery.ui.common.getTaskIconColor
+import com.google.ai.edge.gallery.ui.common.humanReadableSize
 import com.google.ai.edge.gallery.ui.theme.bodyLargeNarrow
+import java.io.File
+import java.util.UUID
 import java.util.concurrent.Executors
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "AGMessageInputText"
+private const val LIVE_METRICS_PROMPT_SCROLL_TIMEOUT_MS = 600L
 
 /** The content shown in the input bar. */
 private enum class InputMode {
   TEXT,
   AUDIO_RECORDER,
+  ASR_DICTATION,
 }
 
 /**
@@ -187,9 +210,12 @@ fun MessageInputText(
   showMcpPicker: Boolean = false,
   showLiveMetricsToggle: Boolean = false,
   isLiveMetricsVisible: Boolean = false,
+  showLiveMetricsPrompt: Boolean = false,
+  onDismissLiveMetricsPrompt: () -> Unit = {},
   onToggleLiveMetrics: () -> Unit = {},
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  showTextFilePicker: Boolean = false,
   showStopButtonWhenInProgress: Boolean = false,
   isContextLimitReached: Boolean = false,
   onImageLimitExceeded: () -> Unit = {},
@@ -200,6 +226,13 @@ fun MessageInputText(
   onPromoteTextInputHistoryItem: (String) -> Unit = {},
   onDeleteTextInputHistoryItem: (String) -> Unit = {},
   onClearTextInputHistory: () -> Unit = {},
+  asrDictationUiState: ChatAsrDictationUiState? = null,
+  onStartAsrDictation:
+    ((onEndedBySession: (transcript: String, failed: Boolean) -> Unit) -> Unit)? =
+    null,
+  onFinishAsrDictation: ((onTranscript: (String) -> Unit) -> Unit)? = null,
+  onCancelAsrDictation: (() -> Unit)? = null,
+  onAsrDictationError: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -212,8 +245,13 @@ fun MessageInputText(
   val audioRecorderSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   var pickedImages by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
   var pickedAudioClips by remember { mutableStateOf<List<AudioClip>>(emptyList()) }
+  var pickedTextFiles by remember { mutableStateOf<List<TextFile>>(emptyList()) }
   var hasFrontCamera by remember { mutableStateOf(false) }
   val sensorObserver = remember { SensorObserver(context) }
+
+  val updatePickedTextFiles: (List<TextFile>) -> Unit = { textFilesList ->
+    pickedTextFiles = textFilesList
+  }
 
   val updatePickedImages: (List<Bitmap>) -> Unit = { bitmaps ->
     val isAiCore = selectedModel.isAiCore
@@ -259,13 +297,22 @@ fun MessageInputText(
 
   LaunchedEffect(pickedAudioClips) { onPickedAudioClipsChanged(pickedAudioClips) }
 
+  var deniedPermissionKind by remember { mutableStateOf<PermissionAccessKind?>(null) }
+
   // Permission request when taking picture.
   val takePicturePermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
       permissionGranted ->
+      PermissionAccessTracker.onPermissionResult(
+        context,
+        Manifest.permission.CAMERA,
+        permissionGranted,
+      )
+      showAddContentMenu = false
       if (permissionGranted) {
-        showAddContentMenu = false
         showCameraCaptureBottomSheet = true
+      } else {
+        deniedPermissionKind = PermissionAccessKind.CAMERA
       }
     }
 
@@ -279,10 +326,46 @@ fun MessageInputText(
   val recordAudioClipsPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
       permissionGranted ->
+      PermissionAccessTracker.onPermissionResult(
+        context,
+        Manifest.permission.RECORD_AUDIO,
+        permissionGranted,
+      )
       if (permissionGranted) {
         handleClickRecordAudioClip()
+      } else {
+        showAddContentMenu = false
+        deniedPermissionKind = PermissionAccessKind.MICROPHONE
       }
     }
+
+  deniedPermissionKind?.let { kind ->
+    PermissionDeniedDialog(kind = kind, onDismiss = { deniedPermissionKind = null })
+  }
+
+  val asrDictationActions =
+    rememberChatAsrDictationActions(
+      asrDictationUiState = asrDictationUiState,
+      curMessage = curMessage,
+      onValueChanged = onValueChanged,
+      onSendTranscriptMessage = { mergedText ->
+        onSendMessage(
+          createMessagesToSend(
+            pickedImages = pickedImages,
+            audioClips = pickedAudioClips,
+            textFiles = pickedTextFiles,
+            text = mergedText,
+          )
+        )
+        pickedImages = emptyList()
+        pickedAudioClips = emptyList()
+        pickedTextFiles = emptyList()
+      },
+      onStartAsrDictation = onStartAsrDictation,
+      onFinishAsrDictation = onFinishAsrDictation,
+      onCancelAsrDictation = onCancelAsrDictation,
+      onAsrDictationError = onAsrDictationError,
+    )
 
   // Registers a photo picker activity launcher in single-select mode.
   val pickMedia =
@@ -326,14 +409,45 @@ fun MessageInputText(
       }
     }
 
+  val pickTextFile =
+    rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+      if (result.resultCode == Activity.RESULT_OK) {
+        val uris = mutableListOf<Uri>()
+        result.data?.clipData?.let { clipData ->
+          for (i in 0 until clipData.itemCount) {
+            uris.add(clipData.getItemAt(i).uri)
+          }
+        } ?: result.data?.data?.let { uri -> uris.add(uri) }
+        if (uris.isNotEmpty()) {
+          scope.launch(Dispatchers.IO) {
+            handleTextFilesSelected(
+              context = context,
+              uris = uris,
+              onTextFilesSelected = { textFiles ->
+                scope.launch(Dispatchers.Main) {
+                  updatePickedTextFiles(pickedTextFiles + textFiles)
+                }
+              },
+            )
+          }
+        }
+      } else {
+        Log.d(TAG, "Text file picking cancelled.")
+      }
+    }
+
   DisposableEffect(lifecycleOwner) {
     lifecycleOwner.lifecycle.addObserver(sensorObserver)
     onDispose { lifecycleOwner.lifecycle.removeObserver(sensorObserver) }
   }
 
   Column {
-    // A preview panel for the selected images and audio clips.
-    if (pickedImages.isNotEmpty() || pickedAudioClips.isNotEmpty()) {
+    // A preview panel for the selected images, audio clips, and text files.
+    if (
+      pickedImages.isNotEmpty() || pickedAudioClips.isNotEmpty() || pickedTextFiles.isNotEmpty()
+    ) {
       Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -379,6 +493,65 @@ fun MessageInputText(
           }
         }
 
+        for ((index, textFile) in pickedTextFiles.withIndex()) {
+          key(textFile.localPath ?: textFile.name) {
+            Box(contentAlignment = Alignment.TopEnd) {
+              Box(
+                modifier =
+                  Modifier.shadow(2.dp, shape = RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.padding(end = 16.dp),
+                ) {
+                  Icon(
+                    if (isPdfFile(name = textFile.name, path = textFile.localPath)) {
+                      Icons.Rounded.PictureAsPdf
+                    } else {
+                      Icons.AutoMirrored.Rounded.Article
+                    },
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                  )
+                  Column {
+                    Text(
+                      text = textFile.name,
+                      style = MaterialTheme.typography.labelMedium,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.widthIn(max = 140.dp),
+                    )
+                    FileSubtitle(
+                      sizeString = textFile.sizeString,
+                      hasText = textFile.content.isNotBlank(),
+                      color =
+                        if (textFile.content.isNotBlank()) {
+                          MaterialTheme.colorScheme.outline
+                        } else {
+                          MaterialTheme.colorScheme.error
+                        },
+                    )
+                  }
+                }
+              }
+              MediaPanelCloseButton {
+                pickedTextFiles = pickedTextFiles.filterIndexed { curIndex, _ -> curIndex != index }
+                // The pending copy is only needed once the file is sent, so delete it when
+                // unstaged.
+                textFile.localPath?.let { path ->
+                  scope.launch(Dispatchers.IO) { File(path).delete() }
+                }
+              }
+            }
+          }
+        }
+
         Spacer(modifier = Modifier.width(16.dp))
       }
     }
@@ -386,6 +559,7 @@ fun MessageInputText(
     val inputMode =
       when {
         showAudioRecorder -> InputMode.AUDIO_RECORDER
+        asrDictationActions.uiState.isDictating -> InputMode.ASR_DICTATION
         else -> InputMode.TEXT
       }
     Box(contentAlignment = Alignment.Center, modifier = Modifier.heightIn(min = 76.dp)) {
@@ -429,12 +603,31 @@ fun MessageInputText(
               }
 
               // Second row: buttons to add extra content, and the action button.
+              val toolbarScrollState = rememberScrollState()
+              val enableLiveMetricsToggle = !inProgress && !isResettingSession && !modelInitializing
+              val showPromptLabel =
+                showLiveMetricsToggle && showLiveMetricsPrompt && enableLiveMetricsToggle
+              LaunchedEffect(showPromptLabel) {
+                if (showPromptLabel) {
+                  // Follow toolbarScrollState.maxValue across layout frames as AnimatedVisibility
+                  // expands the prompt pill at the trailing end of the toolbar.
+                  withTimeoutOrNull(LIVE_METRICS_PROMPT_SCROLL_TIMEOUT_MS) {
+                    snapshotFlow { toolbarScrollState.maxValue }
+                      .collect { maxValue ->
+                        if (maxValue > 0) {
+                          toolbarScrollState.scrollTo(maxValue)
+                        }
+                      }
+                  }
+                }
+              }
               Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).offset(y = (-8).dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
               ) {
                 Row(
+                  modifier = Modifier.weight(1f).horizontalScroll(toolbarScrollState),
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -512,17 +705,21 @@ fun MessageInputText(
                               return@DropdownMenuItem
                             }
                             // Check permission
-                            when (PackageManager.PERMISSION_GRANTED) {
-                              // Already got permission. Call the lambda.
-                              ContextCompat.checkSelfPermission(
+                            when {
+                              PermissionAccessTracker.isPermissionGranted(
                                 context,
-                                Manifest.permission.CAMERA,
+                                PermissionAccessKind.CAMERA,
                               ) -> {
                                 showAddContentMenu = false
                                 showCameraCaptureBottomSheet = true
                               }
-
-                              // Otherwise, ask for permission
+                              PermissionAccessTracker.isPermissionDenied(
+                                context,
+                                PermissionAccessKind.CAMERA,
+                              ) -> {
+                                showAddContentMenu = false
+                                deniedPermissionKind = PermissionAccessKind.CAMERA
+                              }
                               else -> {
                                 takePicturePermissionLauncher.launch(Manifest.permission.CAMERA)
                               }
@@ -598,16 +795,20 @@ fun MessageInputText(
                               return@DropdownMenuItem
                             }
                             // Check permission
-                            when (PackageManager.PERMISSION_GRANTED) {
-                              // Already got permission. Call the lambda.
-                              ContextCompat.checkSelfPermission(
+                            when {
+                              PermissionAccessTracker.isPermissionGranted(
                                 context,
-                                Manifest.permission.RECORD_AUDIO,
+                                PermissionAccessKind.MICROPHONE,
                               ) -> {
                                 handleClickRecordAudioClip()
                               }
-
-                              // Otherwise, ask for permission
+                              PermissionAccessTracker.isPermissionDenied(
+                                context,
+                                PermissionAccessKind.MICROPHONE,
+                              ) -> {
+                                showAddContentMenu = false
+                                deniedPermissionKind = PermissionAccessKind.MICROPHONE
+                              }
                               else -> {
                                 recordAudioClipsPermissionLauncher.launch(
                                   Manifest.permission.RECORD_AUDIO
@@ -657,6 +858,43 @@ fun MessageInputText(
                         )
                       }
 
+                      if (showTextFilePicker) {
+                        DropdownMenuItem(
+                          text = {
+                            Row(
+                              verticalAlignment = Alignment.CenterVertically,
+                              horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                              Icon(Icons.AutoMirrored.Rounded.Article, contentDescription = null)
+                              Text(stringResource(R.string.media_picker_import_text_file))
+                            }
+                          },
+                          onClick = {
+                            showAddContentMenu = false
+
+                            // Show file picker for text, markdown, and PDF files.
+                            val intent =
+                              Intent(Intent.ACTION_GET_CONTENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                                type = "*/*"
+                                val mimeTypes =
+                                  arrayOf(
+                                    "text/plain",
+                                    "text/markdown",
+                                    "text/x-markdown",
+                                    "application/pdf",
+                                    "text/*",
+                                    "application/octet-stream",
+                                  )
+                                putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                                  .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                                  .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                              }
+                            pickTextFile.launch(intent)
+                          },
+                        )
+                      }
                       // Prompt history.
                       DropdownMenuItem(
                         text = {
@@ -738,29 +976,38 @@ fun MessageInputText(
 
                   // Live metrics toggle.
                   if (showLiveMetricsToggle) {
-                    val enableLiveMetricsToggle = !isResettingSession && !modelInitializing
-                    IconToggleButton(
+                    LiveMetricsToggleButton(
                       checked = isLiveMetricsVisible,
-                      onCheckedChange = { onToggleLiveMetrics() },
                       enabled = enableLiveMetricsToggle,
-                      colors =
-                        IconButtonDefaults.iconToggleButtonColors(
-                          containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                          contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                          disabledContainerColor =
-                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f),
-                          disabledContentColor =
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                          checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                          checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                        ),
-                    ) {
-                      Icon(
-                        Icons.Outlined.InsertChart,
-                        contentDescription = stringResource(R.string.cd_toggle_live_metrics),
-                        modifier = Modifier.size(20.dp),
-                      )
-                    }
+                      showPromptLabel = showPromptLabel,
+                      onToggle = {
+                        onDismissLiveMetricsPrompt()
+                        onToggleLiveMetrics()
+                      },
+                    )
+                  }
+                }
+
+                // Voice input (speech-to-text) button.
+                if (onStartAsrDictation != null && !(inProgress && showStopButtonWhenInProgress)) {
+                  IconButton(
+                    enabled =
+                      !inProgress &&
+                        !isResettingSession &&
+                        !modelInitializing &&
+                        !isContextLimitReached,
+                    onClick = asrDictationActions.onStartDictation,
+                  ) {
+                    Icon(
+                      Icons.Rounded.Mic,
+                      contentDescription = stringResource(R.string.asr_dictation_start_desc),
+                      tint =
+                        if (asrDictationActions.isMicPermissionDenied) {
+                          LocalContentColor.current.copy(alpha = 0.38f)
+                        } else {
+                          LocalContentColor.current
+                        },
+                    )
                   }
                 }
 
@@ -789,18 +1036,22 @@ fun MessageInputText(
                       !inProgress &&
                         !isResettingSession &&
                         !isContextLimitReached &&
-                        (curMessage.isNotEmpty() || pickedAudioClips.isNotEmpty()),
+                        (curMessage.isNotEmpty() ||
+                          pickedAudioClips.isNotEmpty() ||
+                          pickedTextFiles.isNotEmpty()),
                     onClick = {
                       var message = curMessage.trim()
                       onSendMessage(
                         createMessagesToSend(
                           pickedImages = pickedImages,
                           audioClips = pickedAudioClips,
+                          textFiles = pickedTextFiles,
                           text = message,
                         )
                       )
                       pickedImages = emptyList()
                       pickedAudioClips = emptyList()
+                      pickedTextFiles = emptyList()
                     },
                     colors =
                       IconButtonDefaults.iconButtonColors(
@@ -839,6 +1090,15 @@ fun MessageInputText(
                 onSetAudioRecorderVisible(false)
               },
             )
+
+          // Voice input.
+          InputMode.ASR_DICTATION ->
+            ChatAsrDictationPanel(
+              uiState = asrDictationActions.uiState,
+              onCancel = asrDictationActions.onCancelDictation,
+              onStop = asrDictationActions.onStopDictation,
+              onSend = asrDictationActions.onSendDictation,
+            )
         }
       }
     }
@@ -854,11 +1114,13 @@ fun MessageInputText(
           createMessagesToSend(
             pickedImages = pickedImages,
             audioClips = pickedAudioClips,
+            textFiles = pickedTextFiles,
             text = item,
           )
         )
         pickedImages = emptyList()
         pickedAudioClips = emptyList()
+        pickedTextFiles = emptyList()
         onPromoteTextInputHistoryItem(item)
       },
       onHistoryItemDeleted = onDeleteTextInputHistoryItem,
@@ -1158,6 +1420,7 @@ private fun checkFrontCamera(context: Context, callback: (Boolean) -> Unit) {
 private fun createMessagesToSend(
   pickedImages: List<Bitmap>,
   audioClips: List<AudioClip>,
+  textFiles: List<TextFile> = listOf(),
   text: String,
 ): List<ChatMessage> {
   val messages: MutableList<ChatMessage> = mutableListOf()
@@ -1197,11 +1460,131 @@ private fun createMessagesToSend(
   }
   messages.addAll(audioMessages)
 
+  // Add file messages.
+  for (textFile in textFiles) {
+    messages.add(
+      ChatMessageFile(
+        name = textFile.name,
+        content = textFile.content,
+        sizeString = textFile.sizeString,
+        uri = textFile.uri,
+        side = ChatSide.USER,
+        localPath = textFile.localPath,
+      )
+    )
+  }
+
   if (text.isNotEmpty()) {
     messages.add(ChatMessageText(content = text, side = ChatSide.USER))
   }
 
   return messages
+}
+
+private suspend fun handleTextFilesSelected(
+  context: Context,
+  uris: List<Uri>,
+  onTextFilesSelected: (List<TextFile>) -> Unit,
+) {
+  val textFiles: MutableList<TextFile> = mutableListOf()
+  for (uri in uris) {
+    try {
+      var displayName: String? = null
+      var fileSize: Long = -1L
+
+      if (uri.scheme == "content") {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+          if (cursor.moveToFirst()) {
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIndex != -1) {
+              displayName = cursor.getString(nameIndex)
+            }
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            // The size column can be NULL for stream-based providers, in which case the size of the
+            // local copy is used instead.
+            if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) {
+              fileSize = cursor.getLong(sizeIndex)
+            }
+          }
+        }
+      }
+
+      if (displayName.isNullOrBlank()) {
+        displayName = uri.lastPathSegment?.substringAfterLast('/') ?: "file.txt"
+      }
+
+      val mimeType = if (uri.scheme == "content") context.contentResolver.getType(uri) else null
+      val isPdf = (mimeType == "application/pdf") || displayName.endsWith(".pdf", ignoreCase = true)
+
+      // Keep an app-private copy of the file so it can be reopened later (e.g. from chat history)
+      // after the temporary read permission for the picked uri is gone.
+      val localFile =
+        copyToLocalAttachmentFile(
+          context = context,
+          uri = uri,
+          extension =
+            if (isPdf) "pdf" else displayName.substringAfterLast('.', missingDelimiterValue = ""),
+        )
+      if (localFile == null) {
+        Log.e(TAG, "Failed to copy picked file from uri $uri")
+        continue
+      }
+
+      // PDFs are attached even when no text can be extracted (e.g. scanned PDFs, or devices that
+      // do not support text extraction), so their pages can still be viewed and the model can tell
+      // the user that it cannot read them. See formatAttachedFilePrompt.
+      val content =
+        if (isPdf) {
+          SandboxedPdf.extractText(context, localFile).orEmpty().also {
+            if (it.isEmpty()) {
+              Log.w(TAG, "No readable text extracted from PDF: $displayName")
+            }
+          }
+        } else {
+          localFile.readText(Charsets.UTF_8)
+        }
+
+      if (isPdf || content.isNotBlank()) {
+        if (fileSize < 0) {
+          fileSize = localFile.length()
+        }
+        val sizeString = fileSize.humanReadableSize(si = false)
+        textFiles.add(
+          TextFile(
+            name = displayName,
+            content = content,
+            sizeString = sizeString,
+            uri = uri,
+            localPath = localFile.absolutePath,
+          )
+        )
+      } else {
+        localFile.delete()
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Log.e(TAG, "Error reading text file from uri $uri", e)
+    }
+  }
+  if (textFiles.isNotEmpty()) {
+    onTextFilesSelected(textFiles)
+  }
+}
+
+/**
+ * Copies the content behind [uri] into a pending attachment file with the given [extension] in the
+ * app's cache dir. Returns the copied file, or null if the uri could not be opened.
+ */
+private fun copyToLocalAttachmentFile(context: Context, uri: Uri, extension: String): File? {
+  val inputStream = openSafeInputStream(context, uri) ?: return null
+  val safeExtension = extension.filter { it.isLetterOrDigit() }.take(8)
+  val fileName =
+    "attachment_pending_${UUID.randomUUID()}" +
+      if (safeExtension.isEmpty()) "" else ".$safeExtension"
+  val file = File(context.cacheDir, fileName)
+  inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+  return file
 }
 
 /**
@@ -1256,4 +1639,66 @@ private class SensorObserver(context: Context) : DefaultLifecycleObserver, Senso
   }
 
   override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+}
+
+@Composable
+private fun LiveMetricsToggleButton(
+  checked: Boolean,
+  enabled: Boolean,
+  showPromptLabel: Boolean,
+  onToggle: () -> Unit,
+) {
+  val containerColor =
+    when {
+      !enabled -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f)
+      checked -> MaterialTheme.colorScheme.secondaryContainer
+      else -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+  val contentColor =
+    when {
+      !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+      checked -> MaterialTheme.colorScheme.onSecondaryContainer
+      else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+  val startPadding by
+    animateDpAsState(
+      targetValue = if (showPromptLabel) 11.dp else 10.dp,
+      label = "liveMetricsStartPadding",
+    )
+  val endPadding by
+    animateDpAsState(
+      targetValue = if (showPromptLabel) 14.dp else 10.dp,
+      label = "liveMetricsEndPadding",
+    )
+
+  // Uses the toggleable Surface overload so the 40dp circle can expand to hold the one-time
+  // discovery prompt label while preserving TalkBack on/off toggle semantics.
+  Surface(
+    checked = checked,
+    onCheckedChange = { onToggle() },
+    enabled = enabled,
+    shape = CircleShape,
+    color = containerColor,
+    contentColor = contentColor,
+    modifier = Modifier.height(40.dp).widthIn(min = 40.dp),
+  ) {
+    Row(
+      modifier = Modifier.padding(start = startPadding, end = endPadding),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Icon(
+        Icons.Outlined.InsertChart,
+        contentDescription = stringResource(R.string.cd_toggle_live_metrics),
+        modifier = Modifier.size(20.dp),
+      )
+      AnimatedVisibility(visible = showPromptLabel) {
+        Text(
+          text = stringResource(R.string.live_metrics_toggle_prompt),
+          style = MaterialTheme.typography.labelMedium,
+          maxLines = 1,
+        )
+      }
+    }
+  }
 }

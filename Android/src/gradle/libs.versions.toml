@@ -35,14 +35,18 @@ moshi = "1.15.2"
 ksp = "2.3.6"
 mcp = "0.8.0"
 ktor = "3.4.3"
-tasksVision = "1.0.0"
-tasksRetrieval = "1.1.0"
+tasksVision = "1.2.0"
+tasksRetrieval = "1.2.0"
 media3 = "1.11.1"
 coil = "2.7.0"
+androidxPdf = "1.0.0-beta01"
 # PhoneAgent: open-source interfaces used by MediaPipe; the uploader is stubbed (docs/NETWORK.md).
 transportApi = "3.1.0"
 # PhoneAgent: used by SkillManager; previously arrived transitively through Firebase.
 documentfile = "1.1.0"
+# PhoneAgent, upstream sync 1.0.23: upstream's ML Kit GenAI libraries (common, speech recognition,
+# text-to-speech, schema and its compiler), XR "projected" and MediaPipe tasks-audio are not
+# declared here: the features that use them are out of the build (app/phoneagent-excluded-sources.txt).
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -96,6 +100,8 @@ androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplaye
 androidx-media3-transformer = { group = "androidx.media3", name = "media3-transformer", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+androidx-pdf-core = { group = "androidx.pdf", name = "pdf-core", version.ref = "androidxPdf" }
+androidx-pdf-document-service = { group = "androidx.pdf", name = "pdf-document-service", version.ref = "androidxPdf" }
 transport-api = { group = "com.google.android.datatransport", name = "transport-api", version.ref = "transportApi" }
 androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 

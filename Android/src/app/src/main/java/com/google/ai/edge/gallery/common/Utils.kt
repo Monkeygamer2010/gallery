@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery.common
 
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.res.AssetFileDescriptor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -40,9 +41,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.core.net.toUri
 import androidx.exifinterface.media.ExifInterface
+import com.google.ai.edge.gallery.ButtonClickAction
+import com.google.ai.edge.gallery.GalleryAnalytics.logGalleryEvent
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.data.SAMPLE_RATE
-import com.google.ai.edge.gallery.firebaseAnalytics
 import com.google.gson.Gson
 import java.io.File
 import java.io.FileInputStream
@@ -154,7 +156,7 @@ fun convertWavToMonoWithMaxSeconds(
 
     // Normalize audio to 16-bit.
     val audioDataBytes = originalBytes.copyOfRange(fromIndex = 44, toIndex = originalBytes.size)
-    var sixteenBitBytes: ByteArray =
+    val sixteenBitBytes: ByteArray =
       if (bitDepth.toInt() == 8) {
         Log.d(TAG, "Converting 8-bit audio to 16-bit.")
         convert8BitTo16Bit(audioDataBytes)
@@ -446,28 +448,8 @@ fun Modifier.clearFocusOnKeyboardDismiss(): Modifier = composed {
   }
 }
 
-fun isAICoreSupported(allowedDeviceModels: Set<String>?): Boolean {
-  if (allowedDeviceModels.isNullOrEmpty()) {
-    Log.w(TAG, "isAICoreSupported: allowedDeviceModels is null or empty")
-    return false
-  }
-  val currentModel = android.os.Build.MODEL?.lowercase()
-  if (currentModel == null) {
-    Log.w(TAG, "isAICoreSupported: current device model is null")
-    return false
-  }
-  val supported = allowedDeviceModels.contains(currentModel)
-  if (!supported) {
-    Log.w(
-      TAG,
-      "isAICoreSupported: device model '$currentModel' is not in the allowed list: $allowedDeviceModels",
-    )
-  }
-  return supported
-}
-
 fun logErrorToFirebase(event: GalleryEvent, errorType: String, errorMessage: String?) {
-  firebaseAnalytics?.logEvent(
+  logGalleryEvent(
     event.id,
     Bundle().apply {
       putBoolean("success", false)
@@ -482,17 +464,28 @@ fun logErrorToFirebase(event: GalleryEvent, errorType: String, errorMessage: Str
  *
  * [eventType] identifies the button and must be unique per button, so that two different buttons
  * are never distinguished by their parameters alone. Pass [buttonId] only for a single button that
- * carries a value, such as one segment of a segmented button. Use [extras] to report any further
- * parameters describing the press; it cannot overwrite the two keys above, which are always written
- * last.
+ * carries a value, such as one segment of a segmented button. Pass [action], [capabilityName], and
+ * [modelId] when the button toggles or acts within a specific task/model context. Use [extras] to
+ * report any further parameters describing the press; it cannot overwrite the standard keys, which
+ * are always written last.
  */
-fun logButtonClick(eventType: String, buttonId: String? = null, extras: Bundle.() -> Unit = {}) {
-  firebaseAnalytics?.logEvent(
+fun logButtonClick(
+  eventType: String,
+  buttonId: String? = null,
+  action: ButtonClickAction? = null,
+  capabilityName: String? = null,
+  modelId: String? = null,
+  extras: Bundle.() -> Unit = {},
+) {
+  logGalleryEvent(
     GalleryEvent.BUTTON_CLICKED.id,
     Bundle().apply {
       extras()
       putString("event_type", eventType)
       buttonId?.let { putString("button_id", it) }
+      action?.let { putString("action", it.id) }
+      capabilityName?.let { putString("capability_name", it) }
+      modelId?.let { putString("model_id", it) }
     },
   )
 }
@@ -504,6 +497,31 @@ fun convertStringToJsonObject(jsonString: String): JsonObject {
     Log.w(TAG, "Could not parse JSON string; using an empty object", e)
     JsonObject(emptyMap())
   }
+}
+
+/**
+ * Returns whether [context] is hosted by a Hilt component manager.
+ *
+ * Matches interface names, so release builds rely on the `-keepnames` rules for
+ * `dagger.hilt.internal.GeneratedComponentManager*` in the app's `proguard.pgcfg`.
+ */
+fun hasHiltComponentManager(context: Context): Boolean {
+  var current: Context? = context
+  while (current != null) {
+    var clazz: Class<*>? = current.javaClass
+    while (clazz != null) {
+      if (
+        clazz.interfaces.any {
+          it.name.startsWith("dagger.hilt.internal.GeneratedComponentManager")
+        }
+      ) {
+        return true
+      }
+      clazz = clazz.superclass
+    }
+    current = (current as? ContextWrapper)?.baseContext
+  }
+  return false
 }
 
 /**

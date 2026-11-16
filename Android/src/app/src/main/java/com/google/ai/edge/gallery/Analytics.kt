@@ -17,22 +17,78 @@
 package com.google.ai.edge.gallery
 
 import android.os.Bundle
+import androidx.annotation.VisibleForTesting
+import com.google.ai.edge.gallery.phoneagent.telemetrystub.NoOpAnalytics
+
+// PhoneAgent fork: Firebase Analytics is removed (docs/NETWORK.md). The delegate is the no-op type
+// from :telemetry-stub and is always null, so the wrapper below keeps upstream's API but never
+// records or sends anything. A direct Firebase call fails the build: the library is not on the
+// classpath, and the privacy guard keeps it off.
+private val firebaseAnalyticsDelegate: NoOpAnalytics? = null
 
 /**
- * PhoneAgent fork: local stand-in for Firebase Analytics, which is removed (docs/NETWORK.md).
+ * Thin wrapper around [FirebaseAnalytics] exposing the subset of its API used by the app.
  *
- * It keeps the two methods upstream call sites use so they compile unchanged. [firebaseAnalytics]
- * is always null, so `firebaseAnalytics?.logEvent(...)` skips the call and never even builds the
- * event bundle. Nothing is recorded or sent.
+ * [FirebaseAnalytics] is a final class that is unavailable in Robolectric unit tests, so tests set
+ * [eventHandler] or [galleryEventSinkForTesting] to intercept and verify logged events and their
+ * parameters instead.
  */
-class NoOpAnalytics private constructor() {
-  @Suppress("UNUSED_PARAMETER") fun logEvent(name: String, params: Bundle?) {}
+object GalleryAnalytics {
+  /**
+   * Optional handler that intercepts every logged event instead of sending it to Firebase.
+   *
+   * Unit tests set this to verify logged event names and parameters, and must reset it to `null`
+   * when done.
+   */
+  @VisibleForTesting @Volatile var eventHandler: ((name: String, params: Bundle?) -> Unit)? = null
 
-  @Suppress("UNUSED_PARAMETER") fun setAnalyticsCollectionEnabled(enabled: Boolean) {}
+  /**
+   * When set, receives every event logged through [logGalleryEvent] instead of Firebase Analytics.
+   *
+   * Tests set it to capture the logged events and their params, and reset it to null afterwards.
+   */
+  @VisibleForTesting @Volatile var galleryEventSinkForTesting: ((String, Bundle) -> Unit)? = null
+
+  /**
+   * Logs the [name] event with [params] to Firebase Analytics, or forwards it to [eventHandler]
+   * instead when one is set.
+   */
+  fun logEvent(name: String, params: Bundle? = null) {
+    val handler = eventHandler
+    if (handler != null) {
+      handler(name, params)
+      return
+    }
+    firebaseAnalyticsDelegate?.logEvent(name, params)
+  }
+
+  /**
+   * Logs the Firebase Analytics event [name] with [params], or hands it to
+   * [galleryEventSinkForTesting] in tests.
+   */
+  fun logGalleryEvent(name: String, params: Bundle) {
+    val sink = galleryEventSinkForTesting
+    if (sink != null) {
+      sink(name, params)
+      return
+    }
+    firebaseAnalytics?.logEvent(name, params)
+  }
+
+  /** Enables or disables Firebase Analytics collection for this app. */
+  fun setAnalyticsCollectionEnabled(enabled: Boolean) {
+    firebaseAnalyticsDelegate?.setAnalyticsCollectionEnabled(enabled)
+  }
 }
 
-val firebaseAnalytics: NoOpAnalytics?
-  get() = null
+/**
+ * Returns [GalleryAnalytics] if events can be logged, i.e. when [GalleryAnalytics.eventHandler] is
+ * set or Firebase Analytics is available, or `null` otherwise.
+ */
+val firebaseAnalytics: GalleryAnalytics?
+  get() = GalleryAnalytics.takeIf {
+    GalleryAnalytics.eventHandler != null || firebaseAnalyticsDelegate != null
+  }
 
 enum class GalleryEvent(val id: String) {
   CAPABILITY_SELECT(id = "capability_select"),
@@ -50,19 +106,29 @@ enum class GalleryEvent(val id: String) {
   CONTEXT_COMPRESSION(id = "context_compression"),
   AUTO_COMPACTION_ENABLE(id = "auto_compaction_enable"),
   RESOURCE_LINK_CLICK(id = "resource_link_click"),
+  OSS_MODEL_IMPORT(id = "oss_model_import"),
+}
+
+const val BUTTON_CLICK_EVENT_LIVE_METRICS_TOGGLE = "live_metrics_toggle"
+
+/** Strongly typed action values for [GalleryEvent.BUTTON_CLICKED] telemetry. */
+enum class ButtonClickAction(val id: String) {
+  TURN_ON("turn_on"),
+  TURN_OFF("turn_off"),
 }
 
 /** Strongly typed Firebase Analytics parameter keys for inference and model lifecycle telemetry. */
 enum class InferenceMetricsParam(val key: String) {
-  MODEL_NAME("model_name"),
+  MODEL_ID("model_id"),
   MODEL_VERSION("model_version"),
-  TASK_ID("task_id"),
+  CAPABILITY_NAME("capability_name"),
   ACCELERATOR("accelerator"),
   STATUS("status"),
   ERROR_CODE("error_code"),
   TURN_INDEX("turn_index"),
   INIT_DURATION_MS("init_duration_ms"),
   SAMPLER_CONFIG("sampler_config"),
+  MODEL_CAPABILITIES("model_capabilities"),
   TOTAL_LATENCY_MS("total_latency_ms"),
   TTFT_MS("ttft_ms"),
   DECODE_DURATION_MS("decode_duration_ms"),
@@ -75,4 +141,5 @@ enum class InferenceMetricsParam(val key: String) {
   MAX_CONTEXT_TOKENS("max_context_tokens"),
   PEAK_MEMORY_MB("peak_memory_mb"),
   AVG_MEMORY_MB("avg_memory_mb"),
+  LIVE_METRICS_ENABLED("live_metrics_enabled"),
 }

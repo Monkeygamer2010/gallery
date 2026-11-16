@@ -1,0 +1,1225 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.ai.edge.gallery.ui.modelmanager
+
+import android.util.Log
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.ai.edge.gallery.data.Model
+import com.google.ai.edge.gallery.data.ModelDownloadStatus
+import com.google.ai.edge.gallery.data.ModelDownloadStatusType
+import com.google.ai.edge.gallery.data.ModelSelectionConfig
+import com.google.ai.edge.gallery.data.ModelSelectionSection
+import com.google.ai.edge.gallery.data.ModelSelectionTarget
+import com.google.ai.edge.gallery.data.ModelType
+import com.google.ai.edge.gallery.data.ModelUnavailabilityReason
+import com.google.ai.edge.gallery.data.SpeechEngineError
+import com.google.ai.edge.gallery.data.SpeechEngineErrorCause
+import com.google.ai.edge.gallery.data.SpeechEngineKind
+import com.google.ai.edge.gallery.data.SpeechLanguageOverlap
+import com.google.ai.edge.gallery.data.Task
+import com.google.ai.edge.gallery.services.asr.AsrEngineType
+import com.google.ai.edge.gallery.services.asr.AsrModelRegistry
+import com.google.ai.edge.gallery.services.tts.TtsModelIdentifier
+import com.google.ai.edge.gallery.services.tts.TtsModelRegistry
+import com.google.ai.edge.gallery.services.tts.isPseudoLocale
+import dagger.hilt.android.lifecycle.HiltViewModel
+import java.util.concurrent.ConcurrentHashMap
+import javax.inject.Inject
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+private const val TAG = "AGTaskModelSelectionVM"
+private const val KEY_INITIALIZED_TASK_ID = "initialized_task_id"
+private const val KEY_SELECTION_PREFIX = "selection_"
+private const val KEY_EXPANDED_SECTIONS = "expanded_sections"
+private const val KEY_EXPANDED_MODELS = "expanded_models"
+private const val KEY_SUMMARY_EXPANDED = "summary_expanded"
+// How long uiState keeps its upstream after the screen stops collecting, so that configuration
+// changes don't restart it.
+private const val STOP_TIMEOUT_MILLIS = 5_000L
+
+/**
+ * What the model selection screen needs from the app-wide model manager. [asModelSelectionHost]
+ * adapts [ModelManagerViewModel]; tests use fakes.
+ */
+interface ModelSelectionHost {
+  /** The model manager state: tasks, supplementary models and download statuses. */
+  val uiState: StateFlow<ModelManagerUiState>
+
+  /** Starts downloading [model]. See [ModelManagerViewModel.downloadModel]. */
+  fun downloadModel(task: Task?, model: Model)
+
+  /** Cancels [model]'s download, if its runtime supports it. */
+  fun cancelDownloadModel(model: Model)
+
+  /** Queries [model]'s current status from its downloader and returns it. */
+  suspend fun refreshModelStatus(model: Model): ModelDownloadStatus?
+
+  /** Whether [model] is the choice currently saved in the app settings for [target]. */
+  fun isSavedSelection(target: ModelSelectionTarget, model: Model): Boolean
+
+  /**
+   * Saves [model] as the app-wide choice for [target]. No-op for [ModelSelectionTarget.MAIN_MODEL],
+   * which is saved per task with [saveMainModel].
+   */
+  fun saveSelection(target: ModelSelectionTarget, model: Model)
+
+  /**
+   * Saves [model] as the main model launched for [task]. It is read back from
+   * [ModelManagerUiState.lastMainModelByTaskId].
+   */
+  fun saveMainModel(task: Task, model: Model)
+
+  /** Whether the current device's memory is lower than [model]'s minimum required memory. */
+  fun isMemoryLow(model: Model): Boolean = false
+
+  /**
+   * Returns the message to show if the models in [downloads], as (task, model) pairs, can't all be
+   * downloaded with the free storage, or `null` if they fit. See
+   * [ModelManagerViewModel.batchDownloadStorageShortfallMessage].
+   */
+  fun batchDownloadStorageShortfallMessage(downloads: List<Pair<Task?, Model>>): String? = null
+
+  /**
+   * Returns how many bytes of [downloads], as (task, model) pairs, the user must agree to download
+   * over mobile data first, or `null` if no confirmation is needed. See
+   * [ModelManagerViewModel.mobileDataDownloadBytes].
+   */
+  fun mobileDataDownloadBytes(downloads: List<Pair<Task?, Model>>): Long? = null
+
+  /**
+   * Forgets that the user started downloading [model], whose download didn't start after all. See
+   * [ModelManagerViewModel.forgetUserStartedDownload].
+   */
+  fun forgetUserStartedDownload(model: Model) {}
+
+  /**
+   * Returns the message to show when downloads can't start because the device isn't connected, or
+   * `null` if it is. See [ModelManagerViewModel.noConnectionMessage].
+   */
+  fun noConnectionMessage(): String? = null
+}
+
+/** Adapts this [ModelManagerViewModel] to [ModelSelectionHost]. */
+fun ModelManagerViewModel.asModelSelectionHost(): ModelSelectionHost =
+  ModelManagerSelectionHost(this)
+
+private class ModelManagerSelectionHost(private val viewModel: ModelManagerViewModel) :
+  ModelSelectionHost {
+  // Whether each model's memory requirement exceeds the device's memory, by model name and
+  // requirement, for as long as this host lives (the selection screen). The device's memory doesn't
+  // change, and the check queries the system over IPC, while the selection screen rebuilds its
+  // state on the main thread on every download progress update.
+  private val memoryLowByModel = ConcurrentHashMap<Pair<String, Int?>, Boolean>()
+
+  override val uiState: StateFlow<ModelManagerUiState>
+    get() = viewModel.uiState
+
+  override fun downloadModel(task: Task?, model: Model) {
+    viewModel.downloadModel(task = task, model = model)
+  }
+
+  override fun cancelDownloadModel(model: Model) {
+    viewModel.cancelDownloadModel(model = model)
+  }
+
+  override suspend fun refreshModelStatus(model: Model): ModelDownloadStatus? =
+    viewModel.refreshModelStatus(model)
+
+  override fun isSavedSelection(target: ModelSelectionTarget, model: Model): Boolean {
+    if (target == ModelSelectionTarget.ASR_MODEL) {
+      return isSavedAsrModel(model = model, savedModelId = viewModel.selectedAsrModelId.value)
+    }
+    if (target == ModelSelectionTarget.TTS_MODEL) {
+      return isSavedTtsModel(
+        model = model,
+        savedEngineId = viewModel.ttsSettingsUiState.value.selectedModelId,
+      )
+    }
+    return false
+  }
+
+  override fun saveSelection(target: ModelSelectionTarget, model: Model) {
+    if (target == ModelSelectionTarget.ASR_MODEL) {
+      viewModel.saveAsrModel(model)
+    }
+    if (target == ModelSelectionTarget.TTS_MODEL) {
+      viewModel.selectTtsEngine(engineId = ttsEngineIdOf(model), model = model)
+    }
+  }
+
+  override fun saveMainModel(task: Task, model: Model) {
+    viewModel.saveLastMainModel(task = task, model = model)
+  }
+
+  override fun isMemoryLow(model: Model): Boolean =
+    memoryLowByModel.getOrPut(model.name to model.minDeviceMemoryInGb) {
+      viewModel.isModelMemoryLow(model)
+    }
+
+  override fun batchDownloadStorageShortfallMessage(downloads: List<Pair<Task?, Model>>): String? =
+    viewModel.batchDownloadStorageShortfallMessage(downloads)
+
+  override fun mobileDataDownloadBytes(downloads: List<Pair<Task?, Model>>): Long? =
+    viewModel.mobileDataDownloadBytes(downloads)
+
+  override fun forgetUserStartedDownload(model: Model) {
+    viewModel.forgetUserStartedDownload(model)
+  }
+
+  override fun noConnectionMessage(): String? = viewModel.noConnectionMessage()
+}
+
+/**
+ * Whether [model] is the ASR model saved as [savedModelId]. The System recognizer never matches, as
+ * it means that no model is selected.
+ */
+internal fun isSavedAsrModel(model: Model, savedModelId: String): Boolean {
+  if (
+    savedModelId.isEmpty() ||
+      AsrModelRegistry.engineTypeForModelId(savedModelId) == AsrEngineType.SYSTEM_DEFAULT
+  ) {
+    return false
+  }
+  val engineType = AsrModelRegistry.engineTypeForModelId(model.modelId)
+  return if (engineType != null) {
+    savedModelId == AsrModelRegistry.modelId(engineType) ||
+      savedModelId == model.modelId ||
+      savedModelId == model.name
+  } else {
+    savedModelId == model.name || (model.modelId.isNotEmpty() && savedModelId == model.modelId)
+  }
+}
+
+/** The TTS engine id [model] is selected under. */
+internal fun ttsEngineIdOf(model: Model): String =
+  model.ttsProfile?.engineModelId?.ifEmpty { null } ?: model.name
+
+/**
+ * Whether [model] is the TTS model saved as [savedEngineId]. The Android System voice never
+ * matches, as it means that no model is selected.
+ */
+internal fun isSavedTtsModel(model: Model, savedEngineId: String): Boolean =
+  model.modelType == ModelType.TTS &&
+    !TtsModelIdentifier.isSystemEngine(savedEngineId) &&
+    savedEngineId == ttsEngineIdOf(model)
+
+/**
+ * Returns the supported BCP-47 language tags for a speech candidate [model] in [target], excluding
+ * Android testing pseudo-locales (`-XA`, `-XB`, `-XC` such as `ar-XA`).
+ */
+internal fun supportedLanguagesForCandidate(
+  target: ModelSelectionTarget,
+  model: Model,
+): List<String> {
+  if (target == ModelSelectionTarget.ASR_MODEL) {
+    return AsrModelRegistry.supportedLanguages(model).filterNot(String::isPseudoLocale)
+  }
+  if (target == ModelSelectionTarget.TTS_MODEL) {
+    return TtsModelRegistry.supportedLanguages(model).filterNot(String::isPseudoLocale)
+  }
+  return emptyList()
+}
+
+/** Returns the models [section] offers, in display order. */
+internal fun candidatesFor(
+  section: ModelSelectionSection,
+  task: Task,
+  modelManagerUiState: ModelManagerUiState,
+): List<Model> =
+  when (section.target) {
+    ModelSelectionTarget.MAIN_MODEL ->
+      task.models.filter { !it.downloadInfo.imported && section.modelFilter(it) }
+    ModelSelectionTarget.ASR_MODEL,
+    ModelSelectionTarget.TTS_MODEL ->
+      modelManagerUiState.supplementaryModels.filter(section.modelFilter)
+  }
+
+/**
+ * Whether [model] can be picked given its [status] and [isMemoryLow]. Models that can't run on this
+ * device, models whose minimum memory requirement exceeds the device's memory, and models the
+ * system downloads on startup (AICore) that failed, can't be fixed from the selection screen.
+ */
+internal fun isModelSelectable(
+  model: Model,
+  status: ModelDownloadStatus?,
+  isMemoryLow: Boolean = false,
+): Boolean =
+  when {
+    isMemoryLow -> false
+    status?.status == ModelDownloadStatusType.UNAVAILABLE -> false
+    status?.status == ModelDownloadStatusType.FAILED -> !model.autoDownloadsOnStartup
+    else -> true
+  }
+
+/**
+ * Whether the app-wide choices saved in this host for [task] make a complete selection with
+ * [mainModel], so the task can start without the selection screen: [mainModel] and the saved choice
+ * of every other section are offered by their sections and downloaded.
+ */
+fun ModelSelectionHost.isSavedModelSelectionComplete(
+  task: Task,
+  config: ModelSelectionConfig,
+  mainModel: Model,
+): Boolean {
+  val modelManagerUiState = uiState.value
+  fun isDownloaded(model: Model) =
+    modelManagerUiState.modelDownloadStatus[model.name]?.status == ModelDownloadStatusType.SUCCEEDED
+  return config.sections.all { section ->
+    val candidates = candidatesFor(section, task, modelManagerUiState)
+    when (section.target) {
+      ModelSelectionTarget.MAIN_MODEL ->
+        candidates.any { it.name == mainModel.name } &&
+          isDownloaded(mainModel) &&
+          !isMemoryLow(mainModel)
+      ModelSelectionTarget.ASR_MODEL,
+      ModelSelectionTarget.TTS_MODEL ->
+        candidates.any {
+          isSavedSelection(section.target, it) && isDownloaded(it) && !isMemoryLow(it)
+        }
+    }
+  }
+}
+
+/**
+ * The speech engine error for a speech model of a [target] section whose status check before launch
+ * reported [status], or `null` for main models.
+ */
+internal fun speechEngineErrorFor(
+  target: ModelSelectionTarget,
+  status: ModelDownloadStatus,
+): SpeechEngineError? {
+  val kind =
+    when (target) {
+      ModelSelectionTarget.MAIN_MODEL -> return null
+      ModelSelectionTarget.ASR_MODEL -> SpeechEngineKind.SPEECH_RECOGNITION
+      ModelSelectionTarget.TTS_MODEL -> SpeechEngineKind.VOICE
+    }
+  val cause =
+    when (status.unavailability?.reason) {
+      ModelUnavailabilityReason.SPEECH_SERVICES_OUTDATED_OR_MISSING ->
+        SpeechEngineErrorCause.SPEECH_SERVICES_OUTDATED
+      else -> SpeechEngineErrorCause.OTHER
+    }
+  return SpeechEngineError(kind = kind, cause = cause)
+}
+
+/**
+ * A selected speech model that wasn't ready when the task was about to launch.
+ *
+ * @property model The model that wasn't ready.
+ * @property sectionId The section that offers [model].
+ * @property error What the error popup shows.
+ */
+data class ModelNotReadyUiState(
+  val model: Model,
+  val sectionId: String,
+  val error: SpeechEngineError,
+)
+
+/** A model offered by a section of the selection screen. */
+data class ModelSelectionCandidateUiState(
+  val model: Model,
+  val downloadStatus: ModelDownloadStatus?,
+  val isSelected: Boolean,
+  val isSelectable: Boolean,
+  val isExpanded: Boolean,
+  val isMemoryLow: Boolean = false,
+  val supportedLanguages: List<String> = emptyList(),
+)
+
+/** A section of the selection screen. */
+data class ModelSelectionSectionUiState(
+  val section: ModelSelectionSection,
+  val candidates: List<ModelSelectionCandidateUiState>,
+  /** The selected model, or `null` if none is selected or the selected one can't be used. */
+  val selectedModel: Model?,
+  val isExpanded: Boolean,
+) {
+  /** The number of selected models, shown in the summary sheet. */
+  val selectedCount: Int
+    get() = if (selectedModel == null) 0 else 1
+}
+
+/** What happens after the user taps Try it. */
+enum class ModelSelectionLaunchPhase {
+  /** Nothing is launching. */
+  IDLE,
+
+  /** The download checks (memory, access, notification permission) are running. */
+  GATING,
+
+  /** The selected models are downloading. */
+  DOWNLOADING,
+
+  /** The selected models are downloaded and their status is being checked before launch. */
+  CHECKING,
+}
+
+/**
+ * Asks the screen to run the download checks before Try it starts downloads.
+ *
+ * @property id Distinguishes successive requests.
+ * @property memoryCheckModel The model to show the low-memory warning for, if any.
+ * @property modelsToDownload The models that need downloading.
+ */
+data class ModelSelectionGateRequest(
+  val id: Long,
+  val memoryCheckModel: Model?,
+  val modelsToDownload: List<Model>,
+)
+
+/**
+ * Asks the user to agree to download the models of Try it over mobile data.
+ *
+ * @property request The download checks that passed.
+ * @property downloadBytes The remaining size of all the models to download.
+ */
+data class ModelSelectionMobileDataConfirmation(
+  val request: ModelSelectionGateRequest,
+  val downloadBytes: Long,
+)
+
+/** UI state of the sectioned model selection screen. */
+data class TaskModelSelectionUiState(
+  val sections: List<ModelSelectionSectionUiState> = emptyList(),
+  val isSummaryExpanded: Boolean = false,
+  /**
+   * Whether Try it can be tapped: every section has its required selection and nothing launches.
+   */
+  val canTryIt: Boolean = false,
+  /**
+   * How the languages of the selected speech recognition and text-to-speech models overlap, or
+   * `null` when the task doesn't check this or either speech section has no selection yet.
+   */
+  val speechLanguageOverlap: SpeechLanguageOverlap? = null,
+  val launchPhase: ModelSelectionLaunchPhase = ModelSelectionLaunchPhase.IDLE,
+  /** Overall download progress in [0, 1] while downloading, or `null` when unknown. */
+  val downloadProgress: Float? = null,
+  val gateRequest: ModelSelectionGateRequest? = null,
+  /** The section whose header the list should scroll to the top, consumed with [onScrolled]. */
+  val scrollToSectionId: String? = null,
+  /** The main model to launch the task with, consumed with [onLaunchHandled]. */
+  val launchModel: Model? = null,
+  /** The speech model that wasn't ready when the task was about to launch, if any. */
+  val notReady: ModelNotReadyUiState? = null,
+  /**
+   * The message to show when Try it didn't start any download because the device isn't connected or
+   * the selected models don't all fit in the free storage, dismissed with
+   * [TaskModelSelectionViewModel.dismissDownloadError].
+   */
+  val downloadErrorMessage: String? = null,
+  /**
+   * The mobile data dialog to show before Try it starts its downloads, answered with
+   * [TaskModelSelectionViewModel.onMobileDataDownloadConfirmed] or
+   * [TaskModelSelectionViewModel.onMobileDataDownloadCancelled].
+   */
+  val mobileDataConfirmation: ModelSelectionMobileDataConfirmation? = null,
+)
+
+private data class SelectionState(
+  /** The selected model name of each section, by section id. */
+  val selections: Map<String, String> = emptyMap(),
+  val expandedSectionIds: Set<String> = emptySet(),
+  /** Names of the model cards the user expanded. Every card starts collapsed. */
+  val expandedModelNames: Set<String> = emptySet(),
+  val isSummaryExpanded: Boolean = false,
+  val launchPhase: ModelSelectionLaunchPhase = ModelSelectionLaunchPhase.IDLE,
+  val gateRequest: ModelSelectionGateRequest? = null,
+  /** Names of the models whose download was started by the current launch. */
+  val startedDownloads: Set<String> = emptySet(),
+  val scrollToSectionId: String? = null,
+  val launchModel: Model? = null,
+  val notReady: ModelNotReadyUiState? = null,
+  val downloadErrorMessage: String? = null,
+  val mobileDataConfirmation: ModelSelectionMobileDataConfirmation? = null,
+)
+
+private data class Binding(
+  val host: ModelSelectionHost,
+  val task: Task,
+  val config: ModelSelectionConfig,
+)
+
+/** Identifies a model offered by a section of the selection screen. */
+private data class CandidateKey(val sectionId: String, val modelName: String)
+
+/**
+ * Whether this section shows the same candidate instances as [other], in the same state, so that
+ * this section can be reused in place of [other]. Candidates are compared by identity, as
+ * `buildUiState` only reuses a candidate for the same Model instance.
+ */
+private fun ModelSelectionSectionUiState.hasSameCandidatesAs(
+  other: ModelSelectionSectionUiState
+): Boolean =
+  section == other.section &&
+    isExpanded == other.isExpanded &&
+    selectedModel === other.selectedModel &&
+    candidates.size == other.candidates.size &&
+    candidates.indices.all { candidates[it] === other.candidates[it] }
+
+/**
+ * ViewModel of the sectioned model selection screen shown for tasks with a
+ * [com.google.ai.edge.gallery.customtasks.common.CustomTask.modelSelectionConfig].
+ *
+ * It holds the pending selection of each section, which sections and cards are expanded, and the
+ * Try it flow: download checks, concurrent downloads, a status check, then launch. Choices are
+ * saved only at launch: the speech choices to the app settings, because starting or cancelling a
+ * download resets the saved speech choice of that model, and the main model for the task. The
+ * pending selection is kept in the [SavedStateHandle].
+ *
+ * Call [bind] before using it.
+ */
+@HiltViewModel
+class TaskModelSelectionViewModel
+@Inject
+constructor(private val savedStateHandle: SavedStateHandle) : ViewModel() {
+  private val binding = MutableStateFlow<Binding?>(null)
+  private val state = MutableStateFlow(restoreState())
+  private var observeJob: Job? = null
+  private var launchJob: Job? = null
+  private var nextGateRequestId = 0L
+
+  /**
+   * The candidates of the last built UI state, by section and model. [buildUiState] reuses the ones
+   * that didn't change, so the screen skips their rows. Only accessed on the main thread.
+   */
+  private var lastCandidates: Map<CandidateKey, ModelSelectionCandidateUiState> = emptyMap()
+
+  /**
+   * The sections of the last built UI state, by section id. [buildUiState] reuses the ones that
+   * didn't change, so the screen skips their headers. Only accessed on the main thread.
+   */
+  private var lastSections: Map<String, ModelSelectionSectionUiState> = emptyMap()
+
+  val uiState: StateFlow<TaskModelSelectionUiState> =
+    binding
+      .flatMapLatest { currentBinding ->
+        if (currentBinding == null) {
+          flowOf(TaskModelSelectionUiState())
+        } else {
+          combine(currentBinding.host.uiState, state) { modelManagerUiState, selectionState ->
+            buildUiState(currentBinding, modelManagerUiState, selectionState)
+          }
+        }
+      }
+      .stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+        TaskModelSelectionUiState(),
+      )
+
+  /**
+   * Binds the screen to [task] and its [config]. On first entry it preselects the main model last
+   * launched for [task] (or the "Best overall" one if that can no longer be picked) and the speech
+   * models saved in the app settings (never the System defaults), and expands every section and
+   * every model card.
+   */
+  fun bind(host: ModelSelectionHost, task: Task, config: ModelSelectionConfig) {
+    val current = binding.value
+    if (current != null && current.host === host && current.task.id == task.id) {
+      return
+    }
+    val newBinding = Binding(host = host, task = task, config = config)
+    val initializedTaskId: String? = savedStateHandle[KEY_INITIALIZED_TASK_ID]
+    if (initializedTaskId != task.id) {
+      state.value = initialState(newBinding)
+      savedStateHandle[KEY_INITIALIZED_TASK_ID] = task.id
+      persist(state.value)
+    }
+    binding.value = newBinding
+    observeJob?.cancel()
+    observeJob = viewModelScope.launch {
+      // The selection state only triggers a check here; continueLaunch reads its live value.
+      combine(host.uiState, state) { modelManagerUiState, _ -> modelManagerUiState }
+        .collect { modelManagerUiState -> continueLaunch(newBinding, modelManagerUiState) }
+    }
+  }
+
+  /**
+   * Selects [model] in the section [sectionId], keeps that section open, and expands and scrolls to
+   * the next section without a selection, or expands the summary sheet once every section has one.
+   * Selecting another model while a launch is downloading cancels the replaced model's download and
+   * stops the launch.
+   */
+  fun selectModel(sectionId: String, model: Model) {
+    val currentBinding = binding.value ?: return
+    val modelManagerUiState = currentBinding.host.uiState.value
+    val section = currentBinding.config.sections.firstOrNull { it.id == sectionId } ?: return
+    val candidates = candidatesFor(section, currentBinding.task, modelManagerUiState)
+    if (
+      candidates.none { it.name == model.name } ||
+        !isModelSelectable(
+          model = model,
+          status = modelManagerUiState.modelDownloadStatus[model.name],
+          isMemoryLow = currentBinding.host.isMemoryLow(model),
+        )
+    ) {
+      return
+    }
+    val current = state.value
+    val previousName = current.selections[sectionId]
+    var startedDownloads = current.startedDownloads
+    var launchPhase = current.launchPhase
+    if (previousName != null && previousName != model.name) {
+      if (previousName in startedDownloads) {
+        val previousModel = candidates.firstOrNull { it.name == previousName }
+        val previousStatus = modelManagerUiState.modelDownloadStatus[previousName]?.status
+        if (previousModel != null && previousStatus != ModelDownloadStatusType.SUCCEEDED) {
+          Log.d(TAG, "Cancelling the download of replaced model '$previousName'")
+          currentBinding.host.cancelDownloadModel(previousModel)
+        }
+        startedDownloads = startedDownloads - previousName
+      }
+      if (launchPhase != ModelSelectionLaunchPhase.IDLE) {
+        launchJob?.cancel()
+        launchPhase = ModelSelectionLaunchPhase.IDLE
+      }
+    }
+    val selections = current.selections + (sectionId to model.name)
+    val sectionIds = currentBinding.config.sections.map { it.id }
+    val index = sectionIds.indexOf(sectionId)
+    // Look for the next section without a selection, wrapping around.
+    val nextSectionId =
+      (sectionIds.drop(index + 1) + sectionIds.take(index)).firstOrNull { it !in selections }
+    // The answered section stays open, so the user can still compare its models.
+    val expandedSectionIds = current.expandedSectionIds + listOfNotNull(nextSectionId)
+    update(
+      current.copy(
+        selections = selections,
+        expandedSectionIds = expandedSectionIds,
+        isSummaryExpanded = current.isSummaryExpanded || nextSectionId == null,
+        launchPhase = launchPhase,
+        gateRequest =
+          if (launchPhase == ModelSelectionLaunchPhase.IDLE) null else current.gateRequest,
+        startedDownloads =
+          if (launchPhase == ModelSelectionLaunchPhase.IDLE) emptySet() else startedDownloads,
+        scrollToSectionId = nextSectionId,
+      )
+    )
+  }
+
+  /** Expands or collapses the section [sectionId]. */
+  fun toggleSection(sectionId: String) {
+    val current = state.value
+    val expanded =
+      if (sectionId in current.expandedSectionIds) {
+        current.expandedSectionIds - sectionId
+      } else {
+        current.expandedSectionIds + sectionId
+      }
+    update(current.copy(expandedSectionIds = expanded))
+  }
+
+  /** Shows or hides the description of the card for [modelName]. */
+  fun setModelExpanded(modelName: String, expanded: Boolean) {
+    val current = state.value
+    val names =
+      if (expanded) current.expandedModelNames + modelName
+      else current.expandedModelNames - modelName
+    update(current.copy(expandedModelNames = names))
+  }
+
+  /** Expands or collapses the summary sheet. */
+  fun toggleSummaryExpanded() {
+    val current = state.value
+    update(current.copy(isSummaryExpanded = !current.isSummaryExpanded))
+  }
+
+  /**
+   * Starts the Try it flow when every section has its selection: asks the screen to run the
+   * download checks through [TaskModelSelectionUiState.gateRequest]. The low-memory warning only
+   * covers the main model.
+   */
+  fun onTryItClicked() {
+    val currentBinding = binding.value ?: return
+    val uiState = buildUiState(currentBinding, currentBinding.host.uiState.value, state.value)
+    if (!uiState.canTryIt) {
+      return
+    }
+    val selectedModels = uiState.sections.mapNotNull { it.selectedModel }
+    val statuses = currentBinding.host.uiState.value.modelDownloadStatus
+    val mainModel =
+      uiState.sections
+        .firstOrNull { it.section.target == ModelSelectionTarget.MAIN_MODEL }
+        ?.selectedModel
+    val request =
+      ModelSelectionGateRequest(
+        id = nextGateRequestId++,
+        memoryCheckModel = mainModel,
+        modelsToDownload = selectedModels.filter { needsDownload(it, statuses[it.name]) },
+      )
+    update(
+      state.value.copy(
+        launchPhase = ModelSelectionLaunchPhase.GATING,
+        gateRequest = request,
+        notReady = null,
+        downloadErrorMessage = null,
+        mobileDataConfirmation = null,
+      )
+    )
+  }
+
+  /**
+   * Called when the download checks of [request] passed: starts the missing downloads concurrently,
+   * expands the sections whose model downloads, and launches once every model is ready.
+   *
+   * If the device isn't connected, or the missing models don't all fit in the free storage, nothing
+   * starts, and the launch stops with [TaskModelSelectionUiState.downloadErrorMessage]. When both
+   * fail, the connection error shows. Otherwise, on mobile data, nothing starts until the user
+   * agrees in the dialog of [TaskModelSelectionUiState.mobileDataConfirmation].
+   *
+   * @param mobileDataConfirmed Whether the user already agreed to download over mobile data.
+   */
+  fun onGatesPassed(request: ModelSelectionGateRequest, mobileDataConfirmed: Boolean = false) {
+    val currentBinding = binding.value ?: return
+    val current = state.value
+    if (current.gateRequest?.id != request.id) {
+      return
+    }
+    val sectionByModelName =
+      currentBinding.config.sections
+        .mapNotNull { section -> current.selections[section.id]?.let { it to section } }
+        .toMap()
+    val downloads =
+      request.modelsToDownload.map { model ->
+        val section = sectionByModelName[model.name]
+        val task =
+          if (section?.target == ModelSelectionTarget.MAIN_MODEL) currentBinding.task else null
+        task to model
+      }
+    // Like a single download, only the downloads the app runs need a connection to start: system
+    // services queue theirs, and models already downloaded launch offline.
+    val noConnectionMessage =
+      if (downloads.any { (_, model) -> model.downloadsViaRepository }) {
+        currentBinding.host.noConnectionMessage()
+      } else {
+        null
+      }
+    if (noConnectionMessage != null) {
+      Log.w(TAG, "Not starting the downloads of ${downloads.map { it.second.name }}: no connection")
+      update(
+        current.copy(
+          launchPhase = ModelSelectionLaunchPhase.IDLE,
+          gateRequest = null,
+          downloadErrorMessage = noConnectionMessage,
+        )
+      )
+      return
+    }
+    val storageShortfallMessage =
+      currentBinding.host.batchDownloadStorageShortfallMessage(downloads)
+    if (storageShortfallMessage != null) {
+      Log.w(TAG, "Not starting the downloads of ${downloads.map { it.second.name }}: no storage")
+      update(
+        current.copy(
+          launchPhase = ModelSelectionLaunchPhase.IDLE,
+          gateRequest = null,
+          downloadErrorMessage = storageShortfallMessage,
+        )
+      )
+      return
+    }
+    val mobileDataDownloadBytes =
+      if (mobileDataConfirmed) null else currentBinding.host.mobileDataDownloadBytes(downloads)
+    if (mobileDataDownloadBytes != null) {
+      update(
+        current.copy(
+          mobileDataConfirmation =
+            ModelSelectionMobileDataConfirmation(
+              request = request,
+              downloadBytes = mobileDataDownloadBytes,
+            )
+        )
+      )
+      return
+    }
+    for ((task, model) in downloads) {
+      Log.d(TAG, "Downloading model '${model.name}'")
+      currentBinding.host.downloadModel(task = task, model = model)
+    }
+    val statuses = currentBinding.host.uiState.value.modelDownloadStatus
+    val activeSelectedNames =
+      current.selections.values
+        .filter { name ->
+          val status = statuses[name]?.status
+          status == ModelDownloadStatusType.IN_PROGRESS ||
+            status == ModelDownloadStatusType.UNZIPPING
+        }
+        .toSet()
+    val trackedDownloads = request.modelsToDownload.map { it.name }.toSet() + activeSelectedNames
+    val downloadingSectionIds = trackedDownloads.mapNotNull { sectionByModelName[it]?.id }.toSet()
+    update(
+      current.copy(
+        launchPhase = ModelSelectionLaunchPhase.DOWNLOADING,
+        gateRequest = null,
+        mobileDataConfirmation = null,
+        startedDownloads = trackedDownloads,
+        expandedSectionIds = current.expandedSectionIds + downloadingSectionIds,
+      )
+    )
+  }
+
+  /** Called when the user agrees to download the models of Try it over mobile data. */
+  fun onMobileDataDownloadConfirmed() {
+    val confirmation = state.value.mobileDataConfirmation ?: return
+    update(state.value.copy(mobileDataConfirmation = null))
+    onGatesPassed(confirmation.request, mobileDataConfirmed = true)
+  }
+
+  /**
+   * Called when the user doesn't agree to download over mobile data: nothing starts, the models are
+   * no longer recorded as downloads the user started, and Try it is idle again.
+   */
+  fun onMobileDataDownloadCancelled() {
+    val current = state.value
+    val confirmation = current.mobileDataConfirmation ?: return
+    binding.value?.let { currentBinding ->
+      for (model in confirmation.request.modelsToDownload) {
+        currentBinding.host.forgetUserStartedDownload(model)
+      }
+    }
+    update(
+      current.copy(
+        launchPhase = ModelSelectionLaunchPhase.IDLE,
+        gateRequest = null,
+        mobileDataConfirmation = null,
+      )
+    )
+  }
+
+  /** Called when the download checks of [request] failed or the user cancelled them. */
+  fun onGatesAborted(request: ModelSelectionGateRequest) {
+    val current = state.value
+    if (current.gateRequest?.id != request.id) {
+      return
+    }
+    update(current.copy(launchPhase = ModelSelectionLaunchPhase.IDLE, gateRequest = null))
+  }
+
+  /**
+   * Stops the launch and cancels the downloads it started. Downloads of runtimes that can't be
+   * cancelled (AICore, ML Kit) keep running.
+   */
+  fun cancelLaunch() {
+    val currentBinding = binding.value ?: return
+    val current = state.value
+    launchJob?.cancel()
+    val modelManagerUiState = currentBinding.host.uiState.value
+    for (name in current.startedDownloads) {
+      if (
+        modelManagerUiState.modelDownloadStatus[name]?.status == ModelDownloadStatusType.SUCCEEDED
+      ) {
+        continue
+      }
+      val model = findModel(currentBinding, modelManagerUiState, name) ?: continue
+      currentBinding.host.cancelDownloadModel(model)
+    }
+    update(
+      current.copy(
+        launchPhase = ModelSelectionLaunchPhase.IDLE,
+        gateRequest = null,
+        mobileDataConfirmation = null,
+        startedDownloads = emptySet(),
+      )
+    )
+  }
+
+  /** Called once the list scrolled to [TaskModelSelectionUiState.scrollToSectionId]. */
+  fun onScrolled() {
+    update(state.value.copy(scrollToSectionId = null))
+  }
+
+  /** Called once the screen navigated to the task with [TaskModelSelectionUiState.launchModel]. */
+  fun onLaunchHandled() {
+    update(state.value.copy(launchModel = null))
+  }
+
+  /** Dismisses the speech engine error popup of a model that wasn't ready. */
+  fun dismissNotReadyModel() {
+    update(state.value.copy(notReady = null))
+  }
+
+  /**
+   * Dismisses the message that Try it didn't start any download, because the device isn't connected
+   * or the selected models don't fit in the free storage.
+   */
+  fun dismissDownloadError() {
+    update(state.value.copy(downloadErrorMessage = null))
+  }
+
+  /** Dismisses the error popup of a model that wasn't ready and runs Try it again. */
+  fun retryNotReadyModel() {
+    dismissNotReadyModel()
+    onTryItClicked()
+  }
+
+  /**
+   * Dismisses the error popup of a model that wasn't ready and expands its section so that the user
+   * can choose another model.
+   */
+  fun chooseAnotherModelForNotReady() {
+    val notReady = state.value.notReady ?: return
+    update(state.value.copy(notReady = null))
+    expandSectionById(notReady.sectionId)
+  }
+
+  /**
+   * Expands the section that picks [target] and scrolls its header to the top, for a task that
+   * sends the user back to choose another model.
+   */
+  fun expandSection(target: ModelSelectionTarget) {
+    val currentBinding = binding.value ?: return
+    val section = currentBinding.config.sections.firstOrNull { it.target == target } ?: return
+    expandSectionById(section.id)
+  }
+
+  private fun expandSectionById(sectionId: String) {
+    val current = state.value
+    update(
+      current.copy(
+        expandedSectionIds = current.expandedSectionIds + sectionId,
+        scrollToSectionId = sectionId,
+      )
+    )
+  }
+
+  /**
+   * Launches once every selected model is downloaded: checks the status of the system-managed
+   * speech models, saves the speech choices to the app settings and the main model for the task,
+   * and asks the screen to navigate. Stops when a download fails.
+   */
+  private fun continueLaunch(currentBinding: Binding, modelManagerUiState: ModelManagerUiState) {
+    // Reads the live state rather than the snapshot that triggered this call: a host update during
+    // the launch (for example saving the choices, or a status refresh) can deliver a stale
+    // DOWNLOADING snapshot after the launch moved on, which would launch again.
+    val selectionState = state.value
+    if (selectionState.launchPhase != ModelSelectionLaunchPhase.DOWNLOADING) {
+      return
+    }
+    val uiState = buildUiState(currentBinding, modelManagerUiState, selectionState)
+    val selected = uiState.sections.map { it.section to it.selectedModel }
+    val statuses = modelManagerUiState.modelDownloadStatus
+    val hasFailedModel = selected.any { (_, model) ->
+      model == null ||
+        statuses[model.name]?.status == ModelDownloadStatusType.FAILED ||
+        // The download paused, e.g. because the connection broke. The user resumes it.
+        statuses[model.name]?.isPaused(model) == true ||
+        statuses[model.name]?.authError != null
+    }
+    if (hasFailedModel) {
+      // A selected model can no longer be used, for example because its download failed.
+      update(
+        selectionState.copy(
+          launchPhase = ModelSelectionLaunchPhase.IDLE,
+          startedDownloads = emptySet(),
+        )
+      )
+      return
+    }
+    if (selected.any { statuses[it.second?.name]?.status != ModelDownloadStatusType.SUCCEEDED }) {
+      return
+    }
+    update(selectionState.copy(launchPhase = ModelSelectionLaunchPhase.CHECKING))
+    launchJob = viewModelScope.launch {
+      for ((section, model) in selected) {
+        if (model == null || !isSystemManagedSpeechModel(model)) {
+          continue
+        }
+        val status = currentBinding.host.refreshModelStatus(model)
+        if (status != null && status.status != ModelDownloadStatusType.SUCCEEDED) {
+          Log.w(TAG, "Model '${model.name}' is not ready: ${status.status}")
+          val error =
+            speechEngineErrorFor(section.target, status)
+              ?: SpeechEngineError(
+                SpeechEngineKind.SPEECH_RECOGNITION,
+                SpeechEngineErrorCause.OTHER,
+              )
+          update(
+            state.value.copy(
+              launchPhase = ModelSelectionLaunchPhase.IDLE,
+              startedDownloads = emptySet(),
+              notReady = ModelNotReadyUiState(model = model, sectionId = section.id, error = error),
+            )
+          )
+          return@launch
+        }
+      }
+      var mainModel: Model? = null
+      for ((section, model) in selected) {
+        if (model == null) continue
+        if (section.target == ModelSelectionTarget.MAIN_MODEL) {
+          mainModel = model
+          currentBinding.host.saveMainModel(currentBinding.task, model)
+        } else {
+          currentBinding.host.saveSelection(section.target, model)
+        }
+      }
+      update(
+        state.value.copy(
+          launchPhase = ModelSelectionLaunchPhase.IDLE,
+          startedDownloads = emptySet(),
+          launchModel = mainModel,
+        )
+      )
+    }
+  }
+
+  private fun buildUiState(
+    currentBinding: Binding,
+    modelManagerUiState: ModelManagerUiState,
+    selectionState: SelectionState,
+  ): TaskModelSelectionUiState {
+    val statuses = modelManagerUiState.modelDownloadStatus
+    val previousCandidates = lastCandidates
+    val previousSections = lastSections
+    val builtCandidates = HashMap<CandidateKey, ModelSelectionCandidateUiState>()
+    val sections =
+      currentBinding.config.sections.map { section ->
+        val selectedName = selectionState.selections[section.id]
+        val candidates =
+          candidatesFor(section, currentBinding.task, modelManagerUiState).map { model ->
+            val key = CandidateKey(sectionId = section.id, modelName = model.name)
+            val status = statuses[model.name]
+            val memoryLow = currentBinding.host.isMemoryLow(model)
+            val candidate =
+              ModelSelectionCandidateUiState(
+                model = model,
+                downloadStatus = status,
+                isSelected = model.name == selectedName,
+                isSelectable = isModelSelectable(model, status, isMemoryLow = memoryLow),
+                isExpanded = model.name in selectionState.expandedModelNames,
+                isMemoryLow = memoryLow,
+                supportedLanguages = supportedLanguagesForCandidate(section.target, model),
+              )
+            // Reuse the unchanged candidates, so the screen skips their rows when another model's
+            // download progress changes. A candidate is only reused for the same Model instance:
+            // Model equality ignores its runtime state (e.g. its initialized instance), and the
+            // selected Model is the one the task is launched with.
+            val reused =
+              previousCandidates[key]?.takeIf { it.model === model && it == candidate } ?: candidate
+            builtCandidates[key] = reused
+            reused
+          }
+        val sectionState =
+          ModelSelectionSectionUiState(
+            section = section,
+            candidates = candidates,
+            selectedModel = candidates.firstOrNull { it.isSelected && it.isSelectable }?.model,
+            isExpanded = section.id in selectionState.expandedSectionIds,
+          )
+        previousSections[section.id]?.takeIf { it.hasSameCandidatesAs(sectionState) }
+          ?: sectionState
+      }
+    lastCandidates = builtCandidates
+    lastSections = sections.associateBy { it.section.id }
+    val speechLanguageOverlap =
+      currentBinding.config.speechLanguageOverlap?.let {
+        selectedSpeechLanguageOverlap(sections, it)
+      }
+    val isComplete =
+      sections.isNotEmpty() && sections.all { it.selectedCount >= it.section.requiredCount }
+    return TaskModelSelectionUiState(
+      sections = sections,
+      isSummaryExpanded = selectionState.isSummaryExpanded,
+      // Selected speech models that share no language can't run the task.
+      canTryIt =
+        isComplete &&
+          selectionState.launchPhase == ModelSelectionLaunchPhase.IDLE &&
+          speechLanguageOverlap?.shared?.isEmpty() != true,
+      speechLanguageOverlap = speechLanguageOverlap,
+      launchPhase = selectionState.launchPhase,
+      downloadProgress = downloadProgress(selectionState.startedDownloads, statuses),
+      gateRequest = selectionState.gateRequest,
+      scrollToSectionId = selectionState.scrollToSectionId,
+      launchModel = selectionState.launchModel,
+      notReady = selectionState.notReady,
+      downloadErrorMessage = selectionState.downloadErrorMessage,
+      mobileDataConfirmation = selectionState.mobileDataConfirmation,
+    )
+  }
+
+  private fun initialState(newBinding: Binding): SelectionState {
+    val modelManagerUiState = newBinding.host.uiState.value
+    val selections = mutableMapOf<String, String>()
+    for (section in newBinding.config.sections) {
+      val candidates = candidatesFor(section, newBinding.task, modelManagerUiState)
+      val preselected =
+        when (section.target) {
+          ModelSelectionTarget.MAIN_MODEL -> {
+            // The main model last launched for the task, as long as it can still be picked.
+            val lastName = modelManagerUiState.lastMainModelByTaskId[newBinding.task.id]
+            candidates.firstOrNull {
+              it.name == lastName &&
+                isModelSelectable(
+                  model = it,
+                  status = modelManagerUiState.modelDownloadStatus[it.name],
+                  isMemoryLow = newBinding.host.isMemoryLow(it),
+                )
+            }
+              ?: candidates.firstOrNull {
+                newBinding.task.id in it.bestForTaskIds &&
+                  isModelSelectable(
+                    model = it,
+                    status = modelManagerUiState.modelDownloadStatus[it.name],
+                    isMemoryLow = newBinding.host.isMemoryLow(it),
+                  )
+              }
+          }
+          ModelSelectionTarget.ASR_MODEL,
+          ModelSelectionTarget.TTS_MODEL ->
+            candidates.firstOrNull {
+              val status = modelManagerUiState.modelDownloadStatus[it.name]
+              newBinding.host.isSavedSelection(section.target, it) &&
+                status?.status == ModelDownloadStatusType.SUCCEEDED &&
+                isModelSelectable(
+                  model = it,
+                  status = status,
+                  isMemoryLow = newBinding.host.isMemoryLow(it),
+                )
+            }
+        }
+      if (preselected != null) {
+        selections[section.id] = preselected.name
+      }
+    }
+    return SelectionState(
+      selections = selections,
+      // Every section starts expanded by default, even when a model is already preselected.
+      expandedSectionIds = newBinding.config.sections.map { it.id }.toSet(),
+    )
+  }
+
+  private fun restoreState(): SelectionState {
+    val selections =
+      savedStateHandle
+        .keys()
+        .filter { it.startsWith(KEY_SELECTION_PREFIX) }
+        .mapNotNull { key ->
+          val modelName: String? = savedStateHandle[key]
+          modelName?.let { key.removePrefix(KEY_SELECTION_PREFIX) to it }
+        }
+        .toMap()
+    val expandedSectionIds: List<String> = savedStateHandle[KEY_EXPANDED_SECTIONS] ?: emptyList()
+    val expandedModelNames: List<String> = savedStateHandle[KEY_EXPANDED_MODELS] ?: emptyList()
+    val isSummaryExpanded: Boolean = savedStateHandle[KEY_SUMMARY_EXPANDED] ?: false
+    return SelectionState(
+      selections = selections,
+      expandedSectionIds = expandedSectionIds.toSet(),
+      expandedModelNames = expandedModelNames.toSet(),
+      isSummaryExpanded = isSummaryExpanded,
+    )
+  }
+
+  private fun update(newState: SelectionState) {
+    state.update { newState }
+    persist(newState)
+  }
+
+  private fun persist(selectionState: SelectionState) {
+    for ((sectionId, modelName) in selectionState.selections) {
+      savedStateHandle[KEY_SELECTION_PREFIX + sectionId] = modelName
+    }
+    savedStateHandle[KEY_EXPANDED_SECTIONS] = ArrayList(selectionState.expandedSectionIds)
+    savedStateHandle[KEY_EXPANDED_MODELS] = ArrayList(selectionState.expandedModelNames)
+    savedStateHandle[KEY_SUMMARY_EXPANDED] = selectionState.isSummaryExpanded
+  }
+
+  private fun findModel(
+    currentBinding: Binding,
+    modelManagerUiState: ModelManagerUiState,
+    name: String,
+  ): Model? =
+    currentBinding.config.sections
+      .asSequence()
+      .flatMap { candidatesFor(it, currentBinding.task, modelManagerUiState) }
+      .firstOrNull { it.name == name }
+}
+
+/**
+ * Whether [model] still needs downloading before launch. Downloads already running are left alone.
+ */
+private fun needsDownload(model: Model, status: ModelDownloadStatus?): Boolean =
+  when (status?.status) {
+    ModelDownloadStatusType.SUCCEEDED,
+    ModelDownloadStatusType.IN_PROGRESS,
+    ModelDownloadStatusType.UNZIPPING -> false
+    else -> true
+  }
+
+/**
+ * Whether [model] is a speech model whose files the system manages (ML Kit), so its readiness is
+ * checked right before launch.
+ */
+private fun isSystemManagedSpeechModel(model: Model): Boolean =
+  model.isSupplementary && !model.supportsTopLevelDownload
+
+/** Overall progress of the downloads in [names], or `null` while the total size is unknown. */
+private fun downloadProgress(
+  names: Set<String>,
+  statuses: Map<String, ModelDownloadStatus>,
+): Float? {
+  if (names.isEmpty()) {
+    return null
+  }
+  var received = 0L
+  var total = 0L
+  for (name in names) {
+    val status = statuses[name] ?: return null
+    if (status.status == ModelDownloadStatusType.SUCCEEDED) {
+      if (status.totalBytes > 0) {
+        received += status.totalBytes
+        total += status.totalBytes
+      }
+      continue
+    }
+    if (status.totalBytes <= 0) {
+      return null
+    }
+    received += status.receivedBytes
+    total += status.totalBytes
+  }
+  return if (total > 0) (received.toFloat() / total).coerceIn(0f, 1f) else null
+}
+
+/**
+ * How the languages of the selected speech recognition and text-to-speech models overlap, or `null`
+ * until both are selected.
+ */
+private fun selectedSpeechLanguageOverlap(
+  sections: List<ModelSelectionSectionUiState>,
+  overlapOf: (List<String>, List<String>) -> SpeechLanguageOverlap,
+): SpeechLanguageOverlap? {
+  fun selectedLanguages(target: ModelSelectionTarget): List<String>? {
+    val section = sections.firstOrNull { it.section.target == target } ?: return null
+    val selected = section.selectedModel ?: return null
+    return section.candidates.firstOrNull { it.model.name == selected.name }?.supportedLanguages
+  }
+  val asrLanguages = selectedLanguages(ModelSelectionTarget.ASR_MODEL) ?: return null
+  val ttsLanguages = selectedLanguages(ModelSelectionTarget.TTS_MODEL) ?: return null
+  return overlapOf(asrLanguages, ttsLanguages)
+}

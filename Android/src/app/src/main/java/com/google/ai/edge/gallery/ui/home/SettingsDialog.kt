@@ -20,7 +20,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import android.app.UiModeManager
 import android.content.Context
-import android.content.pm.PackageManager
 import androidx.annotation.StringRes
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +33,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -50,10 +51,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,6 +70,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -75,15 +79,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.phoneagent.licenses.LicensesDialog
 import com.google.ai.edge.gallery.phoneagent.modellist.ModelListSettingsSection
 import com.google.ai.edge.gallery.phoneagent.spike.SpikeSettingsSection
+import com.google.ai.edge.gallery.services.asr.AsrEngineType
 import com.google.ai.edge.gallery.ui.common.ClickableLink
 import com.google.ai.edge.gallery.ui.common.tos.AppTosDialog
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import com.google.ai.edge.gallery.ui.modelmanager.checkAsrEngineSupport
+import com.google.ai.edge.gallery.ui.modelmanager.saveAsrEngineType
 import com.google.ai.edge.gallery.ui.theme.ThemeSettings
 import com.google.ai.edge.gallery.ui.theme.labelSmallNarrow
 import java.time.Instant
@@ -114,6 +122,8 @@ fun SettingsDialog(
   val interactionSource = remember { MutableInteractionSource() }
   var showTos by remember { mutableStateOf(false) }
   var showLicenses by remember { mutableStateOf(false) }
+
+  LaunchedEffect(Unit) { modelManagerViewModel.checkAsrEngineSupport() }
 
   Dialog(onDismissRequest = onDismissed) {
     val focusManager = LocalFocusManager.current
@@ -201,6 +211,10 @@ fun SettingsDialog(
               }
             }
           }
+
+          // PhoneAgent fork: upstream shows two settings here that the fork leaves out: the
+          // speech recognition engine switcher (upstream sync 1.0.23: voice features are out of
+          // the build) and the Firebase Analytics switch (Firebase is removed, docs/NETWORK.md).
 
           // HF Token management.
           Column(
@@ -380,3 +394,53 @@ private fun themeLabelRes(theme: Theme): Int =
     Theme.THEME_DARK -> R.string.theme_dark
     else -> R.string.unknown
   }
+
+@StringRes
+private fun asrEngineLabelResId(engineType: AsrEngineType): Int =
+  when (engineType) {
+    AsrEngineType.SYSTEM_DEFAULT -> R.string.asr_engine_system_default
+    AsrEngineType.MLKIT_BASIC -> R.string.asr_engine_mlkit_basic
+    AsrEngineType.MLKIT_ADVANCED -> R.string.asr_engine_mlkit_advanced
+    AsrEngineType.SPEECH_PROCESSOR -> R.string.asr_engine_speech_processor
+  }
+
+@Composable
+private fun AsrEngineOptionRow(
+  title: String,
+  subtitle: String?,
+  selected: Boolean,
+  enabled: Boolean,
+  onClick: () -> Unit,
+) {
+  Row(
+    modifier =
+      Modifier.fillMaxWidth()
+        .selectable(
+          selected = selected,
+          enabled = enabled,
+          role = Role.RadioButton,
+          onClick = onClick,
+        )
+        .padding(vertical = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium,
+        color =
+          if (enabled) MaterialTheme.colorScheme.onSurface
+          else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+      )
+      if (subtitle != null) {
+        Text(
+          text = subtitle,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+        )
+      }
+    }
+    RadioButton(selected = selected, onClick = null, enabled = enabled)
+  }
+}

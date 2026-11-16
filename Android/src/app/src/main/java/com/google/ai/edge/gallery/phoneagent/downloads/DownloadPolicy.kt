@@ -26,7 +26,10 @@ import java.util.UUID
  *   a model or its extra files come from.
  * - Downloads run only while the app process that the owner started them in is alive. WorkManager
  *   persists work and the system scheduler would otherwise resume it later in the background; a
- *   worker started by a later process sees a different [sessionId] and stops before connecting.
+ *   worker started by a later process sees a different [sessionId] and stops before connecting,
+ *   and the next app start cancels such leftover work instead of attaching to it.
+ * - Nothing restarts a download by itself: no resume at app start, and a rerun by the scheduler
+ *   ends the download (DownloadWorker). A stopped download stays paused until the owner taps Resume.
  */
 object DownloadPolicy {
   /** Input-data key carrying the [sessionId] a download was queued in. */
@@ -50,4 +53,14 @@ object DownloadPolicy {
 
   /** Whether a worker queued with [queuedSessionId] may run in the current process. */
   fun mayRunInThisProcess(queuedSessionId: String?): Boolean = queuedSessionId == sessionId
+
+  /** WorkManager tag of the downloads queued in this process (tags are readable from outside the worker). */
+  val sessionTag: String = "phoneagent_session:$sessionId"
+
+  /**
+   * Whether queued work with these [tags] was started in this app process. Work left over from an
+   * earlier process is cancelled, never picked up or resumed (upstream attaches to it and lets it
+   * keep going).
+   */
+  fun startedInThisProcess(tags: Set<String>): Boolean = sessionTag in tags
 }
