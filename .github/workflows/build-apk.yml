@@ -1,11 +1,13 @@
-# PhoneAgent fork: builds the "ci" APK on every push to the working branch and publishes it to a
-# rolling pre-release (tag "phoneagent-ci", replaced on each run). Real release builds are signed
-# locally by the owner; release keys never go on GitHub.
+# PhoneAgent fork: builds the "ci" APK on every push to the working branches and publishes it to a
+# rolling pre-release, replaced on each run: "phoneagent-ci" for the main build branch (MAIN_BRANCH
+# below) only, "phoneagent-ci-sync" for every other branch (upstream syncs), so a branch build never
+# replaces the main APK. Real release builds are signed locally by the owner; release keys never go
+# on GitHub.
 name: Build PhoneAgent APK
 
 on:
   push:
-    branches: ["claude/phone-agent**"]
+    branches: ["claude/phone-agent**", "upstream-sync-**"]
     # Pushes that only change docs/ or Markdown files skip the build. Everything else builds,
     # including this workflow and the privacy checks; Markdown under Android/src (skill files
     # packaged in the APK) builds too. A later pattern overrides an earlier one.
@@ -19,6 +21,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # The branch whose builds are the owner's main APK (pre-release "phoneagent-ci").
+  MAIN_BRANCH: claude/phone-agent-ik31nz
+
 concurrency:
   group: build-apk-${{ github.ref }}
   cancel-in-progress: true
@@ -27,10 +33,19 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     defaults:
       run:
         working-directory: Android/src
     steps:
+      - name: Pick the pre-release
+        id: release
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/$MAIN_BRANCH" ]; then tag=phoneagent-ci; else tag=phoneagent-ci-sync; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishes to: $tag"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -45,8 +60,9 @@ jobs:
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
 
       # Until the signing secrets exist, the ci APK is signed with a debug key. Caching that key
-      # keeps the signature stable between runs so updates install over the previous APK. The
-      # cache expires after 7 days without a build; then reinstall once (or add the secrets).
+      # keeps the signature stable between runs of one branch so updates install over the previous
+      # APK. Caches are per branch (a branch cannot read another branch's key) and expire after 7
+      # days without a build; then reinstall once. The signing secrets give every branch one key.
       - name: Restore CI debug key
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -61,6 +77,12 @@ jobs:
             printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ci.keystore"
             echo "PHONEAGENT_KEYSTORE_FILE=$RUNNER_TEMP/ci.keystore" >> "$GITHUB_ENV"
           fi
+
+      # Unit tests of the privacy rules themselves: the guard rejects each library upstream would
+      # bring in, the APK check finds excluded upstream code and assets, the permission set,
+      # intent filters and package-visibility entries are exact.
+      - name: Privacy rule tests
+        run: ./gradlew --no-daemon -p build-logic test
 
       # Fails on forbidden dependencies (Firebase, Play services, Play Core, ML Kit, AICore,
       # analytics SDKs), local file dependencies, a stale license list and on MediaPipe references
@@ -78,8 +100,9 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew --no-daemon printCiSigning :app:assembleCi
 
-      # assembleCi also runs checkCiApk: forbidden classes, native network imports, leftover debug
-      # logging and merged-manifest rules. Both checks write a report only when they ran and
+      # assembleCi also runs checkCiApk: forbidden classes, classes and assets of the excluded
+      # upstream features, native network imports, leftover debug logging and merged-manifest
+      # rules (exact permissions, intent filters, queries). Both checks write a report only when they ran and
       # passed, so a check that was skipped or switched off cannot look like a pass.
       - name: Verify privacy reports
         run: |
@@ -113,7 +136,7 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: publish-phoneagent-ci
+      group: publish-${{ needs.build.outputs.tag }}
       cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -125,12 +148,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: phoneagent-ci
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
+          case "$TAG" in phoneagent-ci|phoneagent-ci-sync) ;; *) echo "::error::unexpected tag $TAG"; exit 1 ;; esac
           notes="Automatic build of ${GITHUB_REF_NAME} at ${GITHUB_SHA}. Not a release.
           Install: download PhoneAgent-ci.apk and open it on the phone (package suffix .dev).
           SHA-256: $(cut -d' ' -f1 apk/PhoneAgent-ci.apk.sha256)"
+          title="PhoneAgent CI build (${GITHUB_SHA::7})"
+          if [ "$TAG" = phoneagent-ci-sync ]; then
+            notes="Branch build, not the main build (that is the phoneagent-ci pre-release).
+          $notes"
+            title="PhoneAgent branch build ${GITHUB_REF_NAME} (${GITHUB_SHA::7})"
+          fi
           gh release delete "$TAG" --cleanup-tag --yes || true
           gh release create "$TAG" apk/PhoneAgent-ci.apk apk/PhoneAgent-ci.apk.sha256 \
             --prerelease --target "$GITHUB_SHA" \
-            --title "PhoneAgent CI build (${GITHUB_SHA::7})" --notes "$notes"
+            --title "$title" --notes "$notes"
