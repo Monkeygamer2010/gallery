@@ -85,6 +85,41 @@ internal object PrivacyContract {
   const val EXCEPTIONS_FILE = "../../docs/NETWORK.md"
   const val LICENSE_ASSET = "src/main/assets/phoneagent/third_party_licenses.tsv"
   val ROOT_BUILD_FILES = listOf("settings.gradle.kts", "build.gradle.kts", "gradle.properties", "gradle/libs.versions.toml")
+
+  /** Whether [group]:[module] must not ship, unless one of [exceptions] approves it. */
+  fun isForbidden(group: String, module: String, exceptions: List<ApprovedException>): Boolean =
+    (FORBIDDEN_GROUPS.any { group == it || group.startsWith("$it.") } || "$group:$module" in FORBIDDEN_MODULES) &&
+      exceptions.none { it.matches(group, module) }
+
+  /**
+   * The lines of a build file that name a forbidden group or the google-services / oss-licenses
+   * plugins, as (line number, text). Exclusions and approved [exceptions] are not reported.
+   */
+  fun forbiddenBuildFileLines(lines: List<String>, exceptions: List<ApprovedException>): List<Pair<Int, String>> {
+    val textPatterns = FORBIDDEN_GROUPS.map { Regex(Regex.escape(it)) } + Regex("google-services|oss-licenses")
+    val result = mutableListOf<Pair<Int, String>>()
+    lines.forEachIndexed { index, line ->
+      if (textPatterns.none { it.containsMatchIn(line) }) return@forEachIndexed
+      // Exclusions remove dependencies; they are how the build keeps Firebase out.
+      if (line.trimStart().startsWith("exclude(")) return@forEachIndexed
+      val excepted = exceptions.any { line.contains(it.group) && (it.module == "*" || line.contains(it.module)) }
+      if (!excepted) result += (index + 1) to line.trim()
+    }
+    return result
+  }
+}
+
+/** The exceptions the owner approved in docs/NETWORK.md, between the privacy-guard markers. */
+internal fun readApprovedExceptions(file: File): List<ApprovedException> {
+  if (!file.isFile) return emptyList()
+  val text = file.readText()
+  val start = text.indexOf("<!-- privacy-guard-exceptions:start -->")
+  val end = text.indexOf("<!-- privacy-guard-exceptions:end -->")
+  if (start < 0 || end < start) return emptyList()
+  return Regex("`([A-Za-z0-9_.\\-]+):([A-Za-z0-9_.\\-*]+)`")
+    .findAll(text.substring(start, end))
+    .map { ApprovedException(it.groupValues[1], it.groupValues[2]) }
+    .toList()
 }
 
 /**
@@ -161,7 +196,7 @@ private data class Coord(val group: String, val module: String, val version: Str
 
 private data class License(val spdx: String, val name: String, val url: String)
 
-private data class ApprovedException(val group: String, val module: String) {
+internal data class ApprovedException(val group: String, val module: String) {
   fun matches(group: String, module: String) =
     this.group == group && (this.module == "*" || this.module == module)
 }
@@ -183,14 +218,10 @@ abstract class PrivacyGuardTask : DefaultTask() {
 
   @TaskAction
   fun run() {
-    val forbidden = PrivacyContract.FORBIDDEN_GROUPS
-    val exceptions = readExceptions(exceptionsFile)
+    val exceptions = readApprovedExceptions(exceptionsFile)
     val violations = mutableListOf<String>()
 
-    fun isForbidden(group: String, module: String): Boolean =
-      (forbidden.any { group == it || group.startsWith("$it.") } ||
-        "$group:$module" in PrivacyContract.FORBIDDEN_MODULES) &&
-        exceptions.none { it.matches(group, module) }
+    fun isForbidden(group: String, module: String): Boolean = PrivacyContract.isForbidden(group, module, exceptions)
 
     // 1. Resolved dependency graphs: the authoritative list of what ships.
     val regex = PrivacyContract.CONFIGURATION_REGEX
@@ -228,14 +259,9 @@ abstract class PrivacyGuardTask : DefaultTask() {
     }
 
     // 3. Build files as text: catches declared-but-unused libraries and plugins.
-    val textPatterns = forbidden.map { Regex(Regex.escape(it)) } + Regex("google-services|oss-licenses")
     for (file in buildFiles.filter { it.isFile }) {
-      file.readLines().forEachIndexed { index, line ->
-        if (textPatterns.none { it.containsMatchIn(line) }) return@forEachIndexed
-        // Exclusions remove dependencies; they are how the build keeps Firebase out.
-        if (line.trimStart().startsWith("exclude(")) return@forEachIndexed
-        val excepted = exceptions.any { line.contains(it.group) && (it.module == "*" || line.contains(it.module)) }
-        if (!excepted) violations += "${file.name}:${index + 1}: ${line.trim()}"
+      for ((line, text) in PrivacyContract.forbiddenBuildFileLines(file.readLines(), exceptions)) {
+        violations += "${file.name}:$line: $text"
       }
     }
 
@@ -292,18 +318,6 @@ abstract class PrivacyGuardTask : DefaultTask() {
     // CI checks this file, so a run that was skipped or never happened cannot look like a pass.
     report.parentFile.mkdirs()
     report.writeText("PASSED\n$passed\n")
-  }
-
-  private fun readExceptions(file: File): List<ApprovedException> {
-    if (!file.isFile) return emptyList()
-    val text = file.readText()
-    val start = text.indexOf("<!-- privacy-guard-exceptions:start -->")
-    val end = text.indexOf("<!-- privacy-guard-exceptions:end -->")
-    if (start < 0 || end < start) return emptyList()
-    return Regex("`([A-Za-z0-9_.\\-]+):([A-Za-z0-9_.\\-*]+)`")
-      .findAll(text.substring(start, end))
-      .map { ApprovedException(it.groupValues[1], it.groupValues[2]) }
-      .toList()
   }
 
   private fun resolveLicenses(ids: Map<Coord, ModuleComponentIdentifier>): Map<Coord, List<License>> {

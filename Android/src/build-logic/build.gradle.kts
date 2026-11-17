@@ -20,6 +20,8 @@ dependencies {
   implementation("org.ow2.asm:asm:9.8")
   // Provided at runtime by the Android Gradle Plugin the app applies.
   compileOnly("com.android.tools.build:gradle-api:${libs.versions.agp.get()}")
+  // Tests of the privacy rules: ./gradlew -p build-logic test (CI runs them).
+  testImplementation(libs.junit)
 }
 
 gradlePlugin {
