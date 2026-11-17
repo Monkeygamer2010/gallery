@@ -1,8 +1,8 @@
 # PhoneAgent fork: builds the "ci" APK on every push to the working branches and publishes it to a
 # rolling pre-release, replaced on each run: "phoneagent-ci" for the main build branch (MAIN_BRANCH
 # below) only, "phoneagent-ci-sync" for every other branch (upstream syncs), so a branch build never
-# replaces the main APK. Real release builds are signed locally by the owner; release keys never go
-# on GitHub.
+# replaces the main APK. Both are signed with the owner's key from the repository secrets, in one
+# step that alone sees them; an APK signed with anything else is never published.
 name: Build PhoneAgent APK
 
 on:
@@ -24,6 +24,9 @@ permissions:
 env:
   # The branch whose builds are the owner's main APK (pre-release "phoneagent-ci").
   MAIN_BRANCH: claude/phone-agent-ik31nz
+  # SHA-256 of the owner's signing certificate (public; docs/DECISIONS.md, "Signing"). The publish
+  # job refuses an APK signed with any other certificate. Change it only when the key changes.
+  RELEASE_CERT_SHA256: "9A:A9:A0:CF:36:8E:49:CA:81:24:10:DE:5C:EC:F1:31:2D:9E:78:C2:12:E8:45:DE:D9:4C:7D:EB:5A:5E:D5:57"
 
 concurrency:
   group: build-apk-${{ github.ref }}
@@ -35,6 +38,9 @@ jobs:
     timeout-minutes: 60
     outputs:
       tag: ${{ steps.release.outputs.tag }}
+      # "release" when the APK was signed with the key from the secrets, else "throwaway".
+      signed: ${{ steps.sign.outputs.signed }}
+      cert_sha256: ${{ steps.cert.outputs.sha256 }}
     defaults:
       run:
         working-directory: Android/src
@@ -59,25 +65,6 @@ jobs:
       - name: Install Android SDK platform 37
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
 
-      # Until the signing secrets exist, the ci APK is signed with a debug key. Caching that key
-      # keeps the signature stable between runs of one branch so updates install over the previous
-      # APK. Caches are per branch (a branch cannot read another branch's key) and expire after 7
-      # days without a build; then reinstall once. The signing secrets give every branch one key.
-      - name: Restore CI debug key
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.android/debug.keystore
-          key: phoneagent-ci-debug-keystore-v1
-
-      - name: Decode signing keystore (only when the secret is set)
-        env:
-          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
-        run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ci.keystore"
-            echo "PHONEAGENT_KEYSTORE_FILE=$RUNNER_TEMP/ci.keystore" >> "$GITHUB_ENV"
-          fi
-
       # Unit tests of the privacy rules themselves: the guard rejects each library upstream would
       # bring in, the APK check finds excluded upstream code and assets, the permission set,
       # intent filters and package-visibility entries are exact.
@@ -93,12 +80,10 @@ jobs:
       - name: Unit tests
         run: ./gradlew --no-daemon :app:testDebugUnitTest :telemetry-stub:testDebugUnitTest
 
+      # Gradle gets no secret: it signs with a throwaway debug key, and the signing step below
+      # re-signs the APK with the owner's key.
       - name: Build ci APK
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew --no-daemon printCiSigning :app:assembleCi
+        run: ./gradlew --no-daemon :app:assembleCi
 
       # assembleCi also runs checkCiApk: forbidden classes, classes and assets of the excluded
       # upstream features, native network imports, leftover debug logging and merged-manifest
@@ -112,22 +97,101 @@ jobs:
           done
           cat app/build/reports/phoneagent/apk-check-ci.txt
 
-      - name: Remove decoded keystore
-        if: always()
-        run: rm -f "$RUNNER_TEMP/ci.keystore"
+      # The only step that sees the signing secrets. It decodes the keystore into a private temp
+      # folder, re-signs the APK with apksigner and deletes the keystore again, whatever happens.
+      # Nothing it prints contains a secret. Without the secrets the APK keeps the throwaway key:
+      # the run still compiles and tests everything, but publishes nothing.
+      - name: Sign with the owner's key
+        id: sign
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=""
+          for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::Signing secrets not set:$missing. This APK keeps the throwaway debug key and is not published."
+            echo "signed=throwaway" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dir="$RUNNER_TEMP/signing"
+          (umask 077 && mkdir -p "$dir")
+          trap 'rm -rf "$dir"' EXIT
+          if ! printf '%s' "$KEYSTORE_B64" | base64 -d > "$dir/release.keystore" 2> /dev/null || [ ! -s "$dir/release.keystore" ]; then
+            echo "::error::Signing failed: KEYSTORE_B64 is not base64 text of a keystore file."
+            exit 1
+          fi
+          apk=app/build/outputs/apk/ci/app-ci.apk
+          # Scheme v2 only, as Gradle signs (minSdk 31 needs no v1 JAR signature).
+          if ! "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign --ks "$dir/release.keystore" \
+            --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled false \
+            --v4-signing-enabled false --out "$dir/signed.apk" "$apk" > "$dir/apksigner.log" 2>&1; then
+            # Say which secret looks wrong without printing apksigner's output, which can quote values.
+            reason="the keystore could not be used; check all four signing secrets"
+            if grep -qi "keystore password was incorrect" "$dir/apksigner.log"; then
+              reason="KEYSTORE_PASSWORD does not open the keystore"
+            elif grep -qiE "no key with alias|does not contain|alias not found|key entry not found" "$dir/apksigner.log"; then
+              reason="the keystore has no key under KEY_ALIAS (look for a stray space or line break)"
+            elif grep -qiE "UnrecoverableKey|key password|Cannot recover key|Get Key failed" "$dir/apksigner.log"; then
+              reason="KEY_PASSWORD does not unlock the key"
+            elif grep -qiE "Invalid keystore format|DerInputStream|Unrecognized keystore|toDerInputStream" "$dir/apksigner.log"; then
+              reason="KEYSTORE_B64 does not decode to a keystore"
+            fi
+            echo "::error::Signing failed: $reason."
+            exit 1
+          fi
+          mv "$dir/signed.apk" "$apk"
+          echo "signed=release" >> "$GITHUB_OUTPUT"
+          echo "Signed with the owner's key."
 
+      # Verifies the APK's signature and prints its certificate's SHA-256 (public, never a secret).
+      - name: Signing certificate
+        id: cert
+        env:
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: |
+          apk=app/build/outputs/apk/ci/app-ci.apk
+          certs=$("$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk")
+          digests=$(printf '%s\n' "$certs" | grep -oE 'certificate SHA-256 digest: [0-9a-f]{64}' | awk '{print $4}' | sort -u)
+          if [ "$(printf '%s\n' "$digests" | grep -c .)" != 1 ]; then
+            echo "::error::The APK must be signed by exactly one certificate."
+            exit 1
+          fi
+          sha=$(printf '%s' "$digests" | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Signing certificate SHA-256: $sha ($SIGNED key)"
+          if [ "$SIGNED" = release ] && [ "$sha" != "$RELEASE_CERT_SHA256" ]; then
+            echo "::error::The secrets hold another key: the APK's certificate is not the expected $RELEASE_CERT_SHA256."
+            exit 1
+          fi
+
+      # Only an APK signed with the owner's key leaves the job.
       - name: Collect APK
+        if: steps.sign.outputs.signed == 'release'
         run: |
           mkdir -p "$RUNNER_TEMP/apk"
-          cp app/build/outputs/apk/ci/*.apk "$RUNNER_TEMP/apk/PhoneAgent-ci.apk"
+          cp app/build/outputs/apk/ci/app-ci.apk "$RUNNER_TEMP/apk/PhoneAgent-ci.apk"
           (cd "$RUNNER_TEMP/apk" && sha256sum PhoneAgent-ci.apk > PhoneAgent-ci.apk.sha256)
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.sign.outputs.signed == 'release'
         with:
           name: phoneagent-ci-apk
           path: ${{ runner.temp }}/apk/
           if-no-files-found: error
           retention-days: 14
+
+      # The signing step deletes the keystore itself; this also runs when a step failed or the
+      # job was cancelled, and in the temp folder, so it works even if the checkout never ran.
+      - name: Remove decoded keystore
+        if: always()
+        working-directory: ${{ runner.temp }}
+        run: rm -rf "$RUNNER_TEMP/signing" "$RUNNER_TEMP/ci.keystore"
 
   publish:
     needs: build
@@ -139,6 +203,22 @@ jobs:
       group: publish-${{ needs.build.outputs.tag }}
       cancel-in-progress: false
     steps:
+      # A push to our branches publishes only an APK signed with the owner's key.
+      - name: Require the owner's key
+        env:
+          SIGNED: ${{ needs.build.outputs.signed }}
+          CERT: ${{ needs.build.outputs.cert_sha256 }}
+        run: |
+          if [ "$SIGNED" != release ]; then
+            echo "::error::Not publishing: the signing secrets are not set, so this APK carries a throwaway debug key. Set KEYSTORE_B64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD."
+            exit 1
+          fi
+          if [ "$CERT" != "$RELEASE_CERT_SHA256" ]; then
+            echo "::error::Not publishing: the APK's signing certificate is $CERT, not the expected $RELEASE_CERT_SHA256."
+            exit 1
+          fi
+          echo "Publishing an APK signed with certificate SHA-256 $CERT."
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: phoneagent-ci-apk
@@ -149,11 +229,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.build.outputs.tag }}
+          CERT: ${{ needs.build.outputs.cert_sha256 }}
         run: |
           case "$TAG" in phoneagent-ci|phoneagent-ci-sync) ;; *) echo "::error::unexpected tag $TAG"; exit 1 ;; esac
           notes="Automatic build of ${GITHUB_REF_NAME} at ${GITHUB_SHA}. Not a release.
           Install: download PhoneAgent-ci.apk and open it on the phone (package suffix .dev).
-          SHA-256: $(cut -d' ' -f1 apk/PhoneAgent-ci.apk.sha256)"
+          SHA-256: $(cut -d' ' -f1 apk/PhoneAgent-ci.apk.sha256)
+          Signing certificate SHA-256: ${CERT}"
           title="PhoneAgent CI build (${GITHUB_SHA::7})"
           if [ "$TAG" = phoneagent-ci-sync ]; then
             notes="Branch build, not the main build (that is the phoneagent-ci pre-release).
