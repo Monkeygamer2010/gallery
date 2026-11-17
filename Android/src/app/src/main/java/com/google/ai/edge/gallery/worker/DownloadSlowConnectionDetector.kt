@@ -525,10 +525,11 @@ private fun contentRangeTotal(contentRange: String?): Long? =
  * hosts, e.g. the extra data files of a Hugging Face model that are hosted elsewhere.
  */
 internal fun buildAuthorizationHeaderValue(accessToken: String?, url: String): String? {
+  // PhoneAgent fork: the fork's rule comes first and is stricter than upstream's check below:
+  // https only, Hugging Face hosts only, no user-info part in the address (docs/NETWORK.md).
+  if (com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy.authorizationHeaderFor(url, accessToken) == null) return null
   if (accessToken.isNullOrEmpty() || !HuggingFaceUrls.isHuggingFaceUrl(url)) {
     return null
   }
-  // PhoneAgent fork: the fork's rule decides, and it is stricter than the check above: https
-  // only, and no user-info part in the address (docs/NETWORK.md).
-  return com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy.authorizationHeaderFor(url, accessToken)
+  return "Bearer $accessToken"
 }

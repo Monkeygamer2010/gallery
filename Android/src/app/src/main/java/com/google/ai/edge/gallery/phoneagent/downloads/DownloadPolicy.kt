@@ -54,6 +54,12 @@ object DownloadPolicy {
   /** Whether a worker queued with [queuedSessionId] may run in the current process. */
   fun mayRunInThisProcess(queuedSessionId: String?): Boolean = queuedSessionId == sessionId
 
+  /**
+   * Whether WorkManager is running a download again after the system stopped it ([runAttemptCount]
+   * above 0). Such a rerun ends the download, left paused, instead of restarting it.
+   */
+  fun isSchedulerRerun(runAttemptCount: Int): Boolean = runAttemptCount > 0
+
   /** WorkManager tag of the downloads queued in this process (tags are readable from outside the worker). */
   val sessionTag: String = "phoneagent_session:$sessionId"
 

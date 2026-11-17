@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.phoneagent.downloads
 
+import com.google.ai.edge.gallery.worker.buildAuthorizationHeaderValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -66,5 +67,38 @@ class DownloadPolicyTest {
     assertTrue(DownloadPolicy.mayRunInThisProcess(DownloadPolicy.sessionId))
     assertFalse(DownloadPolicy.mayRunInThisProcess("some-earlier-session"))
     assertFalse(DownloadPolicy.mayRunInThisProcess(null))
+  }
+
+  // Upstream sync 1.0.23: upstream's downloader sends the token from its own helper, which reconnects
+  // and resumes. The fork's rule runs first in it, so no other host gets the token.
+  @Test
+  fun upstreamsDownloaderSendsTheTokenNowhereElse() {
+    val others =
+      listOf(
+        "https://dl.google.com/google-ai-edge-gallery/android/smart_album/samples.zip",
+        "https://huggingface.co.evil.example/x",
+        "https://huggingface.co@evil.example/x",
+        "http://huggingface.co/x",
+        "https://hf.co.evil.example/x",
+      )
+    for (url in others) {
+      assertNull("token must not be sent to '$url'", buildAuthorizationHeaderValue(token, url))
+    }
+    assertNull(buildAuthorizationHeaderValue(null, "https://huggingface.co/x"))
+  }
+
+  @Test
+  fun workQueuedByAnEarlierProcessIsNotPickedUp() {
+    assertTrue(DownloadPolicy.startedInThisProcess(setOf("other-tag", DownloadPolicy.sessionTag)))
+    assertFalse(DownloadPolicy.startedInThisProcess(setOf("other-tag", "phoneagent_session:an-earlier-one")))
+    assertFalse(DownloadPolicy.startedInThisProcess(emptySet()))
+    assertTrue(DownloadPolicy.sessionTag.endsWith(DownloadPolicy.sessionId))
+  }
+
+  @Test
+  fun theSchedulerNeverRestartsADownload() {
+    assertFalse("the tapped run itself", DownloadPolicy.isSchedulerRerun(0))
+    assertTrue(DownloadPolicy.isSchedulerRerun(1))
+    assertTrue(DownloadPolicy.isSchedulerRerun(5))
   }
 }

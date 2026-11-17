@@ -75,6 +75,14 @@ internal suspend fun extractDownloadedZip(
       }
       else -> outputDir
     }
+  // PhoneAgent fork: the archive is checked as a whole before anything is written, and the guard
+  // then counts what is really unpacked. A refused archive is deleted (ZipPolicy, docs/SECURITY.md).
+  val phoneagentGuard =
+    com.google.ai.edge.gallery.phoneagent.downloads.ZipPolicy.open(
+      archive = originalFile,
+      modelDir = outputDir,
+      destDir = destDir,
+    )
   if (!destDir.exists()) {
     destDir.mkdirs()
   }
@@ -84,6 +92,7 @@ internal suspend fun extractDownloadedZip(
     var zipEntry: ZipEntry? = zipIn.nextEntry
     while (zipEntry != null) {
       currentCoroutineContext().ensureActive()
+      phoneagentGuard.entry(zipEntry.name) // PhoneAgent fork
       val outFile = File(destDir, zipEntry.name)
       val outPath = outFile.canonicalPath
       val destPath = destDir.canonicalPath
@@ -98,6 +107,7 @@ internal suspend fun extractDownloadedZip(
               var len: Int
               while (zipIn.read(unzipBuffer).also { len = it } > 0) {
                 currentCoroutineContext().ensureActive()
+                phoneagentGuard.wrote(len) // PhoneAgent fork
                 fos.write(unzipBuffer, 0, len)
               }
             }

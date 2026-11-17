@@ -158,6 +158,18 @@ class DownloadWorker(context: Context, params: WorkerParameters) :
           } else {
             File(modelsDir, listOf(modelDir, version).joinToString(separator = File.separator))
           }
+        // PhoneAgent fork: a model's folder and file names come from the model list or an imported
+        // repository. Nothing is downloaded to a place outside the models folder (docs/SECURITY.md).
+        if (
+          !com.google.ai.edge.gallery.phoneagent.downloads.ZipPolicy.targetsStayInside(
+            modelsDir = modelsDir,
+            modelDir = outputDir,
+            fileNames = allFiles.map { it.fileName },
+          )
+        ) {
+          Log.w(TAG, "Not downloading: a file of this model would be written outside the models folder.")
+          return@withContext Result.failure()
+        }
         // Returns the partial file that a file is written to until it's fully downloaded.
         fun tmpFileOf(file: UrlAndFileName): File =
           File(outputDir, "${file.fileName}.$TMP_FILE_EXT")
@@ -175,7 +187,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) :
         // PhoneAgent fork: a download is never restarted by the scheduler. WorkManager reruns work
         // the system had to stop; here that rerun ends the download instead, leaving the partial
         // files so it shows as paused and the owner decides whether to resume (docs/NETWORK.md).
-        if (runAttemptCount > 0) {
+        if (com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy.isSchedulerRerun(runAttemptCount)) {
           Log.i(TAG, "Not restarting a download that the system stopped.")
           return@withContext withPartialDownload(Result.failure())
         }
