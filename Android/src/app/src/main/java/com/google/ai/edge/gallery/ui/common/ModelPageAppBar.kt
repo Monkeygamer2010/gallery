@@ -58,8 +58,9 @@ import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.common.logButtonClick
 import com.google.ai.edge.gallery.customtasks.agentchat.agentSkillTopK
 import com.google.ai.edge.gallery.customtasks.agentchat.agentSkillTopKAdjusted
-import com.google.ai.edge.gallery.customtasks.xrlanguageteacher.models.xrTeacherTopK
-import com.google.ai.edge.gallery.customtasks.xrlanguageteacher.models.xrTeacherTopKAdjusted
+// PhoneAgent fork: the XR language teacher is out of the build (docs/UPSTREAM_SYNC.md).
+// import com.google.ai.edge.gallery.customtasks.xrlanguageteacher.models.xrTeacherTopK
+// import com.google.ai.edge.gallery.customtasks.xrlanguageteacher.models.xrTeacherTopKAdjusted
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Config
 import com.google.ai.edge.gallery.data.ConfigKeys
@@ -491,10 +492,11 @@ fun TaskConfigDialog(
           model.agentSkillTopKAdjusted = true
           model.agentSkillTopK = curConfigValues[ConfigKeys.TOPK.label]
         }
-        BuiltInTaskId.LLM_XR_LANGUAGE_TEACHER -> {
-          model.xrTeacherTopKAdjusted = true
-          model.xrTeacherTopK = curConfigValues[ConfigKeys.TOPK.label]
-        }
+        // PhoneAgent fork: the XR language teacher is out of the build (docs/UPSTREAM_SYNC.md).
+        // BuiltInTaskId.LLM_XR_LANGUAGE_TEACHER -> {
+        //   model.xrTeacherTopKAdjusted = true
+        //   model.xrTeacherTopK = curConfigValues[ConfigKeys.TOPK.label]
+        // }
       }
       modelManagerViewModel.updateConfigValuesUpdateTrigger()
 

@@ -1,0 +1,45 @@
+# PhoneAgent fork: upstream files that are NOT built into the app.
+#
+# The files stay in the tree, unchanged, at upstream's paths, so upstream merges don't turn into
+# delete-versus-edit conflicts. The app is built from a filtered copy of src/main/java and
+# src/main/assets that leaves these out (see "Excluded upstream features" in build.gradle.kts).
+# The APK check fails if a class or an asset from one of them is in the APK.
+# Why each group is out: docs/DECISIONS.md, "Upstream sync 1.0.23". Recipe: docs/UPSTREAM_SYNC.md.
+#
+# One Ant-style pattern per line, relative to src/main and starting with java/ or assets/.
+# Lines starting with # are comments.
+
+# XR language teacher (needs ML Kit GenAI schema, androidx.xr and the glasses service).
+java/com/google/ai/edge/gallery/customtasks/xrlanguageteacher/**
+assets/xr/**
+assets/xr_earcons/**
+
+# Voice: text-to-speech and speech recognition engines and services (ML Kit GenAI speech,
+# MediaPipe tasks-audio, the system's text-to-speech and speech recognition services).
+java/com/google/ai/edge/gallery/services/tts/**
+java/com/google/ai/edge/gallery/services/asr/**
+java/com/google/ai/edge/gallery/data/supplementary/**
+java/com/google/ai/edge/gallery/data/SpeechEngineError.kt
+java/com/google/ai/edge/gallery/di/SpeechServicesModule.kt
+
+# Voice: screens and controls (read aloud, dictation, voice settings, speech model cards, the
+# speech engine error dialog with its Play Store link).
+java/com/google/ai/edge/gallery/ui/common/tts/**
+java/com/google/ai/edge/gallery/ui/common/asr/**
+java/com/google/ai/edge/gallery/ui/common/SpeechEngineErrorDialog.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/ModelManagerAudioSettings.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/ConfigAudioTabMapper.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/VoicePreviewController.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/SupplementaryModelCardMapper.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/SupplementaryModelsViewModel.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/SupplementaryDownloadEvents.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/TtsModelDetails.kt
+
+# The screen where a task picks several models together (a main model plus speech models). Only
+# the XR language teacher uses it.
+java/com/google/ai/edge/gallery/ui/modelmanager/TaskModelSelectionViewModel.kt
+java/com/google/ai/edge/gallery/ui/modelmanager/SectionedModelSelectionScreen.kt
+
+# AICore runtime (ML Kit GenAI prompt API, Play services). Removed in Phase 0; kept in the tree
+# since the 1.0.23 sync so upstream's edits to it merge cleanly.
+java/com/google/ai/edge/gallery/runtime/aicore/**

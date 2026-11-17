@@ -364,6 +364,9 @@ fun GlobalModelManager(
             .fillMaxWidth()
             .padding(top = innerPadding.calculateTopPadding())
       ) {
+        // PhoneAgent fork: speech models are out of the build, so there is no second tab to show
+        // (docs/UPSTREAM_SYNC.md). The next line is the only change; the row below is upstream's.
+        if (com.google.ai.edge.gallery.phoneagent.sync.ExcludedFeatures.SPEECH_MODELS_TAB)
         PrimaryTabRow(
           selectedTabIndex = selectedTab.ordinal,
           containerColor = Color.Transparent,

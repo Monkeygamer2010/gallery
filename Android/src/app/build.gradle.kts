@@ -201,3 +201,42 @@ tasks.register("printCiSigning") {
   val usesKeystore = android.signingConfigs.findByName("ci") != null
   doLast { println(if (usesKeystore) "ci signing: keystore from secrets" else "ci signing: debug key (secrets not set)") }
 }
+
+// PhoneAgent fork: excluded upstream features (voice, XR language teacher, AICore).
+// phoneagent-excluded-sources.txt is the one list of upstream files that are not built. They
+// stay in the tree at upstream's paths; the app is built from filtered copies of src/main/java
+// and src/main/assets without them, plus src/phoneagentStandins: the fork's inert stand-ins for
+// the few types the rest of upstream's code still refers to. A stand-in has the same name as the
+// excluded class, so compiling both would fail: a build that passes proves the file is not in it.
+val excludedSourcesFile = layout.projectDirectory.file("phoneagent-excluded-sources.txt")
+val excludedPatterns: List<String> =
+  excludedSourcesFile.asFile.readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+require(excludedPatterns.all { it.startsWith("java/") || it.startsWith("assets/") }) {
+  "phoneagent-excluded-sources.txt: every pattern starts with java/ or assets/"
+}
+val excludedJavaPatterns = excludedPatterns.filter { it.startsWith("java/") }.map { it.removePrefix("java/") }
+val excludedAssetPatterns = excludedPatterns.filter { it.startsWith("assets/") }.map { it.removePrefix("assets/") }
+val filteredMainSources = layout.buildDirectory.dir("phoneagent/filtered-src/main/java")
+val filteredMainAssets = layout.buildDirectory.dir("phoneagent/filtered-src/main/assets")
+
+val phoneagentFilterSources =
+  tasks.register<Sync>("phoneagentFilterSources") {
+    description = "Copies src/main/java and src/main/assets without the files in phoneagent-excluded-sources.txt."
+    inputs.file(excludedSourcesFile)
+    into(layout.buildDirectory.dir("phoneagent/filtered-src/main"))
+    into("java") { from("src/main/java") { exclude(excludedJavaPatterns) } }
+    into("assets") { from("src/main/assets") { exclude(excludedAssetPatterns) } }
+  }
+
+android {
+  sourceSets.getByName("main") {
+    val dirs = listOf(filteredMainSources.get().asFile, file("src/phoneagentStandins/java"))
+    java.setSrcDirs(dirs)
+    kotlin.setSrcDirs(dirs)
+    assets.setSrcDirs(listOf(filteredMainAssets.get().asFile))
+  }
+}
+
+// Every compile, KSP, asset and lint task depends on preBuild, so the filtered copy is current.
+tasks.named("preBuild") { dependsOn(phoneagentFilterSources) }
+
