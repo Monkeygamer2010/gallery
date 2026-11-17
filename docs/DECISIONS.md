@@ -28,7 +28,13 @@ it by editing this file.
 - New code lives under `com.google.ai.edge.gallery.phoneagent`. No Kotlin package rename.
 - Upstream files get small, appended blocks only. Rename touches only applicationId, label and
   icon (plus the visible title strings).
-- Keep `versionName` (1.0.20) and the pinned LiteRT-LM version unless a change is required.
+- `versionName` is the upstream tag plus a PhoneAgent suffix (`1.0.23-phoneagent.1` since the
+  1.0.23 sync), never the plain tag. Keep the pinned LiteRT-LM version (0.18.0) unless a change is
+  required.
+- Upstream features the fork doesn't ship stay in the tree at upstream's paths but out of the
+  build: one exclusion list (`Android/src/app/phoneagent-excluded-sources.txt`) and inert
+  stand-ins for the types the rest of upstream's code refers to (`app/src/phoneagentStandins`).
+  Recipe for the next sync: `docs/UPSTREAM_SYNC.md`.
 - Keep LICENSE and the upstream file headers. NOTICE lists the fork's changes.
 - Upstream's model list (`ALLOWLIST_BASE_URL` + versionName) knows nothing about our task id. The
   PhoneAgent task lists `Gemma-4-E4B-it` (default) and `Gemma-4-E2B-it` in `modelNames`, and
@@ -151,8 +157,10 @@ it by editing this file.
 
 - Build from `Android/src` with `./gradlew assembleDebug`. No device here: unit-test pure logic
   and hand the owner on-device checklists.
-- `.github/workflows/build-apk.yml` builds on push to the branch and publishes the APK to a
-  rolling pre-release. Build type `ci` (applicationIdSuffix `.dev`) is signed from secrets
+- `.github/workflows/build-apk.yml` builds on push to `claude/phone-agent**` and
+  `upstream-sync-**` and publishes the APK to a rolling pre-release: `phoneagent-ci` for the main
+  build branch (`claude/phone-agent-ik31nz`) only, `phoneagent-ci-sync` for every other branch.
+  Build type `ci` (applicationIdSuffix `.dev`) is signed from secrets
   `KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`, falling back to the debug key
   while they are unset (the owner adds them later; don't ask). Real release keys never go on
   GitHub.
@@ -414,3 +422,134 @@ Assumptions (change any by editing here):
 - **CI:** pushes that change only `docs/` or Markdown files outside `Android/src` don't build.
 - **Spike:** "Copy tree" copies the converted tree as JSON (no password values; clipboard marked
   sensitive), so real screens can become test fixtures.
+
+## Upstream sync 1.0.23 (decisions and assumptions; change any by editing here)
+
+The owner asked for the merge as its own pass: no Phase 3, no agent changes, no new features.
+Recipe and file list: `docs/UPSTREAM_SYNC.md`.
+
+- **Tag:** `1.0.23` (`9cb31cf`, 2026-11-04), the newest tag. Upstream `main` is 31 untagged commits
+  further (to 2026-11-15; its source says 1.0.24). They add no library, permission, host or
+  analytics event, but they are not a tag, so they are not taken.
+- **Which branch is "main":** the owner's main build is `claude/phone-agent-ik31nz` (it publishes
+  `phoneagent-ci`); the repository's `main` is upstream's base `8f5f2a0`. The sync branch
+  `upstream-sync-1.0.23` starts from `claude/phone-agent-ik31nz` at `87e2f2e` (no commits after it).
+  Neither branch is changed by this pass.
+- **Merge:** a real merge commit (`76aea47`), 104 upstream commits, 15 textual conflicts.
+
+### Hard conflicts
+
+- **Model manager** (`ui/modelmanager/ModelManagerViewModel.kt`). *Upstream:* speech and
+  "supplementary" models (text-to-speech and speech recognition settings, a speech model
+  repository, voice preview), the ML Kit speech runtimes, a download planner, the mobile-data
+  confirmation, a network state provider, a paused state for partial downloads, and a startup step
+  (`processPendingDownloads`) that re-attaches to queued work and resumes partial downloads.
+  *Ours:* the login service created only when a login starts; one engine at a time (Phone Agent's
+  engine closed before another model loads, other models closed before Phone Agent loads); the
+  model list from cache or the bundled snapshot; AICore models skipped; nothing re-queued at
+  startup; Resume on tap. *Resolved:* upstream's file with our blocks. The allowlist loop also
+  skips the `MLKIT_SPEECH` and `MLKIT_ASR` runtimes and every speech model; the startup step keeps
+  upstream's watching and cancelling but its resume loop is removed; upstream's Resume button
+  replaces ours; the speech parts compile against inert stand-ins. Our lifecycle rules win
+  wherever they meet upstream's: `initializeModel` still starts with the one-engine hook,
+  `onCleared` disposes the login service only if one was created.
+- **The two download files** (`data/DownloadRepository.kt`, `worker/DownloadWorker.kt`).
+  *Upstream:* a rework: resume over HTTP Range, reconnects when a connection stalls, partial
+  downloads reported as paused, zip extraction moved to `DownloadZipExtractor.kt`, a storage check
+  before unzipping, analytics events. *Ours (Phase 0.1):* the token stored and sent only for
+  Hugging Face https addresses; work from an earlier app process never runs; a "wait for a network"
+  constraint. *Resolved:* upstream's files with our rules on top: the token rule (also first in
+  upstream's header helper), the session id in each request and a session tag on each work item
+  (work from an earlier process is refused and cancelled at the next start), a scheduler rerun ends
+  the download, left paused (`DownloadPolicy.isSchedulerRerun`), and files are written only inside
+  the models folder. The network constraint is **not** re-applied: it made WorkManager restart a
+  download by itself when the network came back. Upstream's own check refuses to start a download
+  without a connection.
+- **The dictation file upstream moved** (`ui/common/textandvoiceinput/HoldToDictateViewModel.kt`
+  to `ui/common/asr/`). *Upstream:* moved it and switched it to its speech engines. *Ours:*
+  dictation only with an on-device recognizer. *Resolved:* upstream's moved file, unchanged and out
+  of the build with the rest of the voice features; our edit is dropped (there is no dictation),
+  and the stand-in's `dictationAvailable = false` keeps our unchanged check in `TextAndVoiceInput.kt`
+  working.
+- **The AICore helper we removed** (`runtime/aicore/AICoreModelHelper.kt`). *Upstream:* changed it.
+  *Ours:* deleted in Phase 0. *Resolved:* upstream's file is back in the tree, with
+  `AICoreModelDownloader.kt`, and out of the build, so later upstream edits merge cleanly.
+- **Analytics** (`Analytics.kt`). *Upstream:* a `GalleryAnalytics` wrapper (`logEvent`,
+  `logGalleryEvent`, collection switch, test hooks) around Firebase Analytics, and new events.
+  *Ours:* Firebase removed. *Resolved:* upstream's wrapper, its delegate typed as the no-op
+  `NoOpAnalytics` from `:telemetry-stub` and always null, so every event goes nowhere. Firebase is
+  not on the classpath, so a direct Firebase call fails the build; the guard keeps it off.
+
+Other conflicts: the version catalog and app build file (ML Kit, `androidx.xr.projected` and
+MediaPipe tasks-audio not declared; `androidx.pdf` declared), `gradle.properties` (ours), the
+manifest (ours: no `GlassesTapActivity`, no package-visibility entries for text-to-speech or the
+glasses service), `GalleryApplication` (no Firebase, notifications or text-to-speech callbacks;
+upstream's isolated-process check kept), `SettingsDialog` (no speech engine switcher, no Firebase
+switch), `GalleryNavGraph` (ours plus upstream's imports), `ModelDownloadGates` (our login guard
+moved there), and the download status UI and `DownloadAndTryButton` (upstream's versions, whose
+paused state with Resume and Discard replaces our "(paused)" label and button).
+
+### Left out of the build
+
+- **Voice** (text-to-speech, speech recognition, dictation: ML Kit GenAI speech, MediaPipe
+  tasks-audio, the system's speech services) and the **XR language teacher** (glasses, ML Kit
+  schema, `androidx.xr.projected`). The product has no voice, and each needs its own privacy
+  review. **AICore** stays out as before.
+- How: the exclusion list, a filtered copy of `src/main/java` and `src/main/assets` for the build
+  (KSP sees every file in a source folder), and stand-ins (`*StandIns.kt`) with the excluded names.
+  Entry points removed in marked blocks: the model manager's speech-models tab row
+  (`GlobalModelManager`), the XR task's lines in the config dialog (`ModelPageAppBar`), the speech
+  engine switcher in Settings. The XR task is never registered (its module is excluded), so it has
+  no card, route, featured slot or model.
+- What that removes from the app: read-aloud buttons, banner and auto-play in chats; the
+  microphone in the chat input; hold-to-dictate in Tiny Garden and Mobile Actions (text only); the
+  config sheet's Audio tab and its promo; the speech models tab and the 7 speech models of the
+  1.0.23 list; the speech engine setting; the XR language teacher and its assets.
+- Also out: `data/SpeechEngineError.kt` and `ui/common/SpeechEngineErrorDialog.kt` (only excluded
+  code used them; the dialog held a Play Store link).
+- Assumption: unused strings of the excluded features and one vector icon stay in the resources
+  (text only, no code or links; excluding them would mean editing upstream's `strings.xml`).
+
+### Downloads, model list, telemetry
+
+- **No automatic download:** a download starts only from a tap. Nothing resumes at startup, after a
+  restart of the app, when the network returns, or when the system reruns the work; a stopped
+  download shows as paused until the owner taps Resume (or Discard). Assumption: within one tapped
+  download, upstream's reconnect after a stalled connection stays (same file, same address, while
+  that download runs).
+- **Archives** (`phoneagent/downloads/ZipPolicy.kt`, marked blocks in `DownloadZipExtractor.kt`
+  and `DownloadWorker.kt`): upstream already refused entries outside the unzip folder. The unzip
+  folder itself (a model-list field) must be inside the model's folder; an archive is checked
+  before anything is written (at most 20,000 entries and 16 GiB unpacked); while unpacking, more
+  entries or bytes than it declares stop it; a refused archive is deleted with what was unpacked.
+- **Model list:** the bundled snapshot is upstream's `1_0_23` list (required by the versionName). It
+  keeps the 11 models of `1_0_20` byte for byte and adds 7 speech models, all skipped.
+- **Telemetry:** upstream's new events (model import, downloads, buttons) go to the no-op wrapper.
+
+### Versions, signing, CI
+
+- **versionName** `1.0.23-phoneagent.1` (`-ci` added by the ci build type).
+- **versionCode stays 46**, the main build's. Upstream's 52 is not taken. Builds of both branches
+  then install over each other in both directions (Android refuses only a lower versionCode). A
+  rising versionCode would make the main APK a downgrade of the sync APK until the sync is
+  merged. To make versionCode rise across branches from then on, CI could derive it from the run
+  number once the main branch carries this workflow.
+- **LiteRT-LM stays 0.18.0.** Upstream moved to 0.18.1 for `maxOutputToken` on `sendMessage` and
+  `sendMessageAsync`; 0.18.0 already has it, and the merged code compiles and passes against it.
+- **Signing (limitation):** until the signing secrets exist, the ci APK is signed with a debug key
+  cached per branch. A sync branch can't read the main branch's cache, so the sync APK and the main
+  APK have different signatures and don't install over each other. The secrets fix this for every
+  branch.
+- **CI:** sync branches build and publish to `phoneagent-ci-sync`; only the main build branch
+  publishes to `phoneagent-ci`. The build-logic tests run before the guard. Upstream's workflows are
+  unchanged in 1.0.23 and stay manual-only.
+
+### Kept from upstream as it is
+
+- PDF attachments in chats (`androidx.pdf`): the document is rendered on the phone by a service in
+  an isolated process (no network permission there), not exported.
+- Session persistence and context compaction (`LlmSessionManager`): they use the conversation of the
+  loaded model; no new engine is created anywhere (every engine and model-load call site is the same
+  as before the merge).
+- The paused-download UI, the mobile-data confirmation, the no-connection message, the network
+  monitor (connectivity callbacks during a download, no traffic of its own), upstream's home layout.

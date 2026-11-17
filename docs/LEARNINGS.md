@@ -1107,3 +1107,133 @@ name it, and searches now go through the address bar), and close old private tab
 
 Wait for your retest. If it passes: the upstream merge as its own phase, then Phase 3.
 
+
+## Upstream sync 1.0.23 (2026-11-17)
+
+The merge of google-ai-edge/gallery as its own pass: no Phase 3, no agent changes, no new
+features. Decisions and the hard conflicts in full: `docs/DECISIONS.md`, "Upstream sync 1.0.23".
+Recipe for the next sync: `docs/UPSTREAM_SYNC.md`.
+
+### What was merged
+
+- Tag `1.0.23` (`9cb31cf`, 2026-11-04), the newest tag. Old upstream base `8f5f2a0` (2026-10-13),
+  new base `9cb31cf`: **104 upstream commits**, 15 textual conflicts.
+- Branch `upstream-sync-1.0.23` from `claude/phone-agent-ik31nz` at `87e2f2e` (no commits on it
+  since). Commits: `76aea47` the merge (a real merge commit), `8b6520b` excluded features and
+  stand-ins, `5f181d0` download and archive rules, `e49565e` privacy checks and tests, `e6a417d`
+  and `9924ba7` CI, then these docs. Neither `claude/phone-agent-ik31nz` nor `main` changed.
+- Upstream `main` is 31 untagged commits past the tag (to 2026-11-15, heading to 1.0.24). They add
+  no library, permission, host or analytics event; not taken, because they are not a tag.
+
+### Hard conflicts (details in DECISIONS.md)
+
+- Model manager: upstream's file; our blocks kept (lazy login service, one engine at a time,
+  offline model list, AICore, ML Kit speech and speech models skipped); upstream's startup resume of
+  partial downloads removed; upstream's Resume button replaces ours.
+- `DownloadRepository.kt`, `DownloadWorker.kt`: upstream's rework with the Phase 0.1 rules on top
+  (token rule, session id and tag, no rerun by the scheduler, files only inside the models folder);
+  the "wait for a network" constraint dropped because WorkManager would restart downloads by itself.
+- `HoldToDictateViewModel.kt` (moved upstream): upstream's file, out of the build with the voice
+  features; our on-device-only edit is dropped.
+- `AICoreModelHelper.kt` (we had deleted it): back as upstream's file, out of the build.
+- `Analytics.kt`: upstream's wrapper, its delegate the no-op type from `:telemetry-stub`, always null.
+
+### Left out of the build
+
+Text-to-speech, speech recognition and dictation, the XR language teacher and AICore: 180 source
+files and 8 assets on one list (`app/phoneagent-excluded-sources.txt`), plus inert stand-ins with the
+names upstream's other code uses. Removed from the app: read aloud in chats, the chat microphone,
+hold-to-dictate in Tiny Garden and Mobile Actions, the config sheet's Audio tab and its promo, the
+model manager's speech models tab (and the 7 speech models of the 1.0.23 list), the speech engine
+setting, the XR task and its assets. The APK check proves none of their classes or assets ships.
+
+### Privacy diff against the main build (APK of `19f7954` against this branch's APK)
+
+- **Dependencies** (all Apache-2.0, release classpath with transitives): new `androidx.pdf`
+  pdf-core, pdf-document-service and pdf-viewer 1.0.0-beta01; transitive Material 1.13.0,
+  constraintlayout 2.1.0 (+ core 1.0.0), coordinatorlayout 1.1.0, cardview 1.0.0, viewpager2
+  1.1.0-beta02, graphics-shapes 1.0.1, kotlin-bom 1.8.22. Changed: MediaPipe tasks-core and
+  tasks-retrieval 1.1.0 → 1.2.0, tasks-vision 1.0.0 → 1.2.0, autofill 1.0.0 → 1.3.0, customview
+  1.0.0 → 1.2.0, drawerlayout 1.0.0 → 1.1.1, dynamicanimation 1.0.0 → 1.1.0, recyclerview 1.3.0 →
+  1.4.0. Gone: legacy-support-core-utils, localbroadcastmanager, print. Not taken: the five ML Kit
+  GenAI libraries, `androidx.xr.projected`, MediaPipe tasks-audio, Firebase, Play services. LiteRT-LM
+  stays 0.18.0. LICENSE, NOTICE and upstream's headers unchanged.
+- **Permissions:** identical (15). **Manifest:** one new component, androidx.pdf's
+  `PdfDocumentServiceImpl` (not exported, isolated process, no intent filter); exported
+  components, intent filters and `<queries>` identical. Upstream's `GlassesTapActivity` and its
+  text-to-speech and glasses `<queries>` are not declared.
+- **Hosts:** none new. Every network, link and browser call site was compared with the previous
+  build. New URL strings only in the bundled model list (the skipped speech models' "learn more"
+  pages on `developers.google.com`), never shown. Nothing new connects by itself.
+- **Telemetry:** upstream's new events go to the no-op wrapper; Firebase isn't on the classpath.
+- **Downloads:** only from a tap; never resumed at startup, by the scheduler or when the network
+  returns; the token only to Hugging Face over https; files only inside the models folder.
+- **Zip extraction:** entries only inside the unzip folder (upstream's check), the unzip folder only
+  inside the model's folder, at most 20,000 entries and 16 GiB, never more than declared; a refused
+  archive is deleted with what was unpacked.
+
+### Measurements (cloud VM)
+
+- Tests: 147 before (144 app, 3 telemetry-stub), **172 after** (159 app, 4 telemetry-stub, 9
+  build-logic). New: hostile archives through upstream's extractor (8), download rules (3), no
+  telemetry (4), the stub's bytecode (1), the guard per forbidden artifact (4), the APK rules (5).
+- APK (ci build): 227,026,017 bytes → 225,227,335 bytes (−1.8 MB). Dex +4.5 MB (54,938 → 58,295
+  classes: upstream's code, androidx.pdf, Material), resources +1.8 MB, native libraries −8.1 MB
+  (MediaPipe 1.2.0's vector store library is 3.7 MB smaller per ABI), XR assets (1.8 MB) not packaged.
+- Privacy guard and APK check pass (local `assembleCi`, debug key).
+
+### Untestable without a phone
+
+Installing over another build, downloads (pause, Resume, Discard, no restart by the system, the
+mobile-data dialog), the PDF viewer, that the hidden voice controls and tabs really are gone, the
+idle network check, and everything Phone Agent does.
+
+### Code the Phase 2.2 retest covers, touched by the merge
+
+- None of `phoneagent/` changed except the download policy (new rules) and two new files.
+- `ModelManagerViewModel.kt` is upstream's new file; the one-engine hook at the start of
+  `initializeModel` is unchanged.
+- `GalleryNavGraph.kt` gained upstream's model-selection route and redirect; no task has a
+  selection config in this build, so neither is reached. The tile hook is unchanged.
+- `LlmChatModelHelper.kt` passes upstream's new optional output-token cap; Phone Agent doesn't set
+  it, so calls are as before.
+- The bundled model list is upstream's 1_0_23 list; the Gemma 4 entries are unchanged.
+
+### Signing (limitation)
+
+Until the signing secrets exist, CI signs with a debug key cached per branch. This branch's APK is
+signed with a different key from the main APK, so it does not install over the main build (or the
+other way round) without uninstalling, which deletes downloaded models. The main branch's cached
+key was last used on 2026-11-07, and GitHub deletes caches unused for 7 days, so the next main
+build most likely gets a new key too. Adding the four secrets gives every branch the same key from
+then on.
+
+### Retest list (Galaxy S25+)
+
+Get the APK from the `phoneagent-ci-sync` pre-release. Because of the signing limitation, step 1
+will most likely fail with "App not installed" (conflicting package).
+
+1. **Install over the main build.** If Android refuses, uninstall the main build (models and
+   settings go with it) and install the sync build.
+2. **Model download by tap:** download Gemma-4-E2B (or E4B). Turn on flight mode mid-download: it
+   shows paused and stays paused when the network is back, until you tap Resume. Force-stop the app
+   mid-download and reopen: no resume by itself.
+3. **AI Chat** on the downloaded model: a short exchange; there's no microphone or read-aloud
+   button, and the config sheet has no Audio tab.
+4. **Phone Agent:** the Bologna task (University of Bologna founded, Wikipedia): 1088, evidence
+   verified.
+5. **Quick Settings tile:** a task from the tile on the tile model.
+6. **One model loaded:** open AI Chat on a model, then Phone Agent: the chat's model is closed first
+   (memory as in Phase 2.2).
+7. **Idle network:** 15 minutes idle with PCAPdroid: no connection from PhoneAgent.
+
+### Open questions
+
+1. Signing: add the four secrets before the retest, or retest with an uninstall?
+2. versionCode stays 46 so builds of both branches install over each other. Should CI number the
+   builds from the run number once the sync is on the main branch?
+
+### Next step
+
+Wait for your retest. If it passes: merge into `claude/phone-agent-ik31nz` (steps in the status),
+then Phase 3.

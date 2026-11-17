@@ -36,15 +36,21 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[done]** `privacyGuard` build check fails on Firebase / Play services / Play Core / ML Kit /
   AICore / common analytics dependencies, local file dependencies, the google-services plugin,
   and MediaPipe references the stub doesn't cover. `check<Variant>Apk` inspects every built APK
-  (dex classes, native imports, leftover debug logging, merged manifest). The rules are constants
-  in build-logic; CI requires both pass reports.
+  (dex classes, native imports, leftover debug logging, merged manifest: exactly the approved
+  permissions, approved intent filters and package-visibility entries only). The rules are
+  constants in build-logic with their own tests; CI requires both pass reports.
+- **[done]** Upstream merges: features the fork doesn't ship stay in the source tree but out of the
+  build, on one exclusion list; since 1.0.23 these are text-to-speech, speech recognition,
+  dictation, the XR language teacher and AICore. The APK check fails if a class or an asset of one
+  of them is in the APK. Recipe: `docs/UPSTREAM_SYNC.md`.
 - **[done]** Skill WebViews: no network unless the owner turns on a skill's "Allow network"
   switch, no access to app-private files, no WebRTC, camera and microphone denied, model-chosen
   script and page names confined to the skill's folder.
 - **[done]** MCP servers: only enabled ones, only while Agent Chat is visible.
 - **[done]** The Hugging Face token is sent only to Hugging Face hosts; secret fields are masked
   and never shown or logged.
-- **[done]** No remote images from rendered text; no Geocoder; on-device speech recognition only.
+- **[done]** No remote images from rendered text; no Geocoder; no speech recognition or
+  text-to-speech at all (not in the build since the 1.0.23 sync).
 - **[done]** No cleartext HTTP, no WebView metrics or Safe Browsing pings, no cloud backup or
   device-to-device transfer of app data.
 - **[done]** Removed upstream's FCM handler, which let any app make PhoneAgent open an arbitrary
@@ -57,6 +63,11 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - **[done]** CI uses first-party GitHub actions pinned to commit SHAs, read-only permissions
   except the publish job, and signing secrets that are decoded to a temp file and deleted. Release
   keys never go to GitHub; the owner signs releases locally.
+- **[done]** Downloads start only from a tap and are never restarted or resumed by anything
+  automatic. Files of a model are written only inside the models folder; an archive is unpacked
+  only inside its model's folder, every entry inside the folder it is unpacked to, with at most
+  20,000 entries and 16 GiB and never more than the archive declares. A refused archive is deleted
+  with whatever was unpacked from it.
 - Model files are downloaded over HTTPS from Hugging Face at the commit pinned in the model list.
   Residual risk: no extra checksum check beyond that pin.
 
@@ -143,8 +154,8 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   refuses to read (it fails closed) until the detection is updated.
 - Accessibility services are powerful by design. If the phone is compromised, PhoneAgent's
   service is another capability an attacker could try to misuse.
-- Upstream merges can reintroduce trackers; the build guard, the APK check and the re-appliable
-  privacy commit exist for that.
+- Upstream merges can reintroduce trackers; the build guard, the APK check, the exclusion list and
+  the re-appliable privacy commit exist for that.
 - A skill whose "Allow network" switch is on runs third-party code with network access; each
   call asks first.
 

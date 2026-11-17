@@ -8,20 +8,22 @@ phone.
 Last full review: Phase 0.1 (2026-10-18), after an independent audit of Phase 0: every network
 call site in the Kotlin sources, the skill assets, the merged manifest, the dex files and the
 native libraries in the built APK. Phase 1 and Phase 2 added no network code; the APK check
-still finds no socket or DNS imports in native code.
+still finds no socket or DNS imports in native code. Upstream sync 1.0.23 (2026-11-17): every
+network, link and browser call site of the merged build compared with the previous build. No new
+host, and nothing new that connects by itself (details below each table).
 
 ## What the app connects to
 
 | # | Who (code) | Host(s) | When | Owner-initiated? |
 |---|---|---|---|---|
 | 1 | Model download (`DownloadWorker`) | `huggingface.co` and its file CDN (`cdn-lfs*.huggingface.co`, `*.xethub.hf.co`); `dl.google.com` (Smart Album's sample photos, an optional extra file of EmbeddingGemma-2); `storage.googleapis.com` (Scrapbook's "Magic touch" model) | Tapping **Download** on a model. The Hugging Face token is sent only to `https://huggingface.co` and its subdomains | Yes |
-| 1a | Resume of an interrupted download | same as 1 | Only when you tap **Resume download** on that model. Nothing resumes at app start or in the background, and download work waits for a network connection | Yes |
+| 1a | Resume of an interrupted download | same as 1 | Only when you tap **Resume** on that model's paused download (or **Discard** to delete it). Nothing resumes at app start, in the background, when the network comes back or when the system reruns the work. While a download you started runs, a stalled connection is reopened to the same address and continues where it stopped. Without a connection a download doesn't start | Yes |
 | 2 | "Refresh model list" (`phoneagent/modellist/ModelListStore.refresh`) | `raw.githubusercontent.com` | Settings > Model list > **Refresh model list** | Yes |
 | 3 | Import a model from a URL (`ModelImportDialog`) | For a Hugging Face URL: `huggingface.co/api` (model details); otherwise a 1-byte request to the URL you typed to read the file size. Then the download (row 1) | Importing by URL | Yes |
 | 4 | Hugging Face login (AppAuth) | `huggingface.co/oauth/*` | Not configured in this fork (placeholder client id): the app shows a message instead. Paste a token in Settings | — |
 | 5 | Agent Chat skills (JS skills in a WebView) | `SKILL.md` from a skill URL you add; for a skill whose **Allow network** switch you turned on: whatever its pages load (for example `query-wikipedia` calls `<lang>.wikipedia.org`, `interactive-map` shows Google Maps) | Adding a skill from a URL; running a skill with network allowed. Every such call asks first | Yes. **Allow network** is off for every skill by default |
 | 6 | Agent Chat MCP servers | the MCP server URLs you add | Adding a server; while Agent Chat is on screen, enabled servers only. Connections close when you leave Agent Chat or the app goes to the background. Every tool call asks first. A server on your local network would also need Android 17's `ACCESS_LOCAL_NETWORK` permission, which the app does not request, and `https` (cleartext is off) | Yes. None configured by default |
-| 7 | Links in the UI (`ClickableLink`, skill homepages, Tiny Garden credits) | any | Tapping a link opens it in your browser; the browser makes the connection (see "Traffic made by other apps") | Yes |
+| 7 | Links in the UI (`ClickableLink`, skill homepages, Tiny Garden credits, a gated model's licence page on `huggingface.co`) | any | Tapping a link opens it in your browser or a Custom Tab; the browser makes the connection (see "Traffic made by other apps") | Yes |
 | 8 | Phone Agent spike (Phase 1) and tasks (Phase 2) | the `https://` page you open from the spike screen; the public `https://` pages a task opens (every address is listed in the run log), the searches it types into Firefox's address bar (sent to Firefox's default search engine) and the links it taps | Firefox's own traffic, in private tabs, after you tap **Open** in the spike tools or start a task. The model runs on the phone: PhoneAgent's process, the accessibility service, the run service and the Quick Settings tile make no connections | Yes |
 
 Nothing else from the app's own process. In particular:
@@ -31,6 +33,14 @@ Nothing else from the app's own process. In particular:
   oss-licenses, the feedback uploader, scheduled notifications, the startup model-list fetch from
   GitHub, the startup download resume, the in-app "View community skills" GitHub page and the
   platform Geocoder lookup in Smart Album (photos show raw coordinates).
+- **Not built (upstream 1.0.23):** text-to-speech, speech recognition and dictation (ML Kit GenAI
+  speech, MediaPipe tasks-audio, the system's speech services and their Play Store links) and the
+  XR language teacher (glasses). Their code stays in the source tree; the APK check proves none of
+  it is in the APK. The 7 speech models of upstream's model list are not offered, so their "learn
+  more" links (`developers.google.com`) are never shown.
+- **On the phone only:** PDF attachments in chats are rendered by `androidx.pdf` in an isolated
+  process, which has no network access. Archives that come with a model are unpacked on the phone.
+  The downloader's network monitor only listens to connectivity changes while a download runs.
 - **Never fetched:** remote images in Markdown (chat, model descriptions, skill text). They are
   shown as links, and the app-wide image loader refuses `http(s)` images.
 - **Not reachable or not wired in upstream:** the "new release" check (`NewReleaseNotification`,
@@ -77,7 +87,7 @@ PCAPdroid attributes that traffic to the other app, not to PhoneAgent.
 |---|---|---|---|
 | Links, skill homepages, credits | your default browser (Firefox) | only when you tap a link | Nothing at startup: the Hugging Face login service (AppAuth), which binds the browser's Custom Tabs service and warms it up, is created only when a login is actually started, and login is not configured |
 | Phone Agent tasks (Phase 2+) | Firefox | while a task you started runs | Pages open in private tabs only. Firefox's own telemetry settings apply; set them in Firefox. uBlock Origin set to run in private browsing blocks trackers on the pages |
-| Hold-to-dictate | the on-device speech recognizer | while you hold the mic button | Only the on-device recognizer is used, with "prefer offline"; the button is hidden when the phone has none. The default (cloud-capable) recognizer is never used |
+| Dictation, read aloud | the phone's speech recognizer and text-to-speech engine | never | Not in the build since the 1.0.23 sync: no microphone button, no hold-to-dictate, no read-aloud |
 | Email, SMS, calendar, contacts, maps (Agent Chat skills, Mobile Actions) | your mail, messages, calendar, contacts and maps apps | after you tap **Allow once** | The other app opens with the content filled in; it sends nothing until you act in it (maps apps look up the place) |
 | Location names for photos | location services (Google Play services) | never | Removed: Smart Album shows raw coordinates |
 | Emoji fonts | font provider (Google Play services) | never | EmojiCompat's startup initializer is removed; the system emoji font is used |
@@ -131,10 +141,16 @@ loosen them, and the build stops if a build script disables either check.
   plugins. It prints every packaged library with its license and checks that the in-app license
   list (`app/src/main/assets/phoneagent/third_party_licenses.tsv`) is current.
 - `check<Variant>Apk` runs with every `assemble<Variant>` and inspects the built APK: no forbidden
-  classes in any dex file, telemetry classes only from `:telemetry-stub`, no native socket or DNS
-  imports, no `Log.v/d/i` calls left in release and ci builds, and merged-manifest rules (approved
-  permissions only; no component other apps can start beyond an approved list; cleartext and
-  backups off; WebView metrics and Safe Browsing off; no EmojiCompat initializer).
+  classes in any dex file, telemetry classes only from `:telemetry-stub`, no class or asset of the
+  upstream features that are out of the build (`app/phoneagent-excluded-sources.txt`), no native
+  socket or DNS imports, no `Log.v/d/i` calls left in release and ci builds, and merged-manifest
+  rules (exactly the approved permissions, so a new one or a removed one fails; intent filters and
+  package-visibility entries only from approved lists; no component other apps can start beyond
+  an approved list; cleartext and backups off; WebView metrics and Safe Browsing off; no
+  EmojiCompat initializer).
+- `./gradlew -p build-logic test` (run by CI) tests these rules themselves, among them that every
+  library upstream 1.0.23 would bring in (ML Kit GenAI, AICore, Firebase, Play services TFLite and
+  OSS licenses, Firebase's uploader) is rejected.
 - Both write a report under `app/build/reports/phoneagent/` only when they pass; CI fails if a
   report is missing or did not pass.
 

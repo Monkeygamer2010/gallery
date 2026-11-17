@@ -5,7 +5,8 @@ out typed tasks by driving Firefox and other apps through an AccessibilityServic
 Full decisions: `docs/DECISIONS.md`. Phase log: `docs/LEARNINGS.md`. Traffic: `docs/NETWORK.md`.
 
 ## Rules
-- Work on `claude/phone-agent*` only. Never touch `main`, never force-push, never push tags.
+- Work on `claude/phone-agent*` only (an upstream sync pass uses `upstream-sync-<tag>`, see
+  `docs/UPSTREAM_SYNC.md`). Never touch `main`, never force-push, never push tags.
 - One phase at a time: commit, push, post a status (changes, on-device checklist, measurements,
   open questions, next step), append it to `docs/LEARNINGS.md`, then wait for the owner's OK.
 - Ask only about decisions that are the owner's; otherwise record the assumption in DECISIONS.md.
@@ -18,7 +19,12 @@ Full decisions: `docs/DECISIONS.md`. Phase log: `docs/LEARNINGS.md`. Traffic: `d
 - New code goes in `com.google.ai.edge.gallery.phoneagent` (app/src/main/java/.../phoneagent).
 - Upstream files: small appended blocks only. No Kotlin package rename.
 - Keep LICENSE and upstream headers; new files get an Apache-2.0 header.
-- Keep `versionName` and the pinned LiteRT-LM version unless a change is required.
+- `versionName` = upstream tag + `-phoneagent.N` (now `1.0.23-phoneagent.1`); `versionCode` stays 46
+  so builds of every branch install over each other. Keep the pinned LiteRT-LM (0.18.0) unless a
+  change is required.
+- Upstream features we don't ship stay in the tree, out of the build: one exclusion list
+  (`app/phoneagent-excluded-sources.txt`) plus inert stand-ins (`app/src/phoneagentStandins`).
+  Recipe, edited files and pitfalls: `docs/UPSTREAM_SYNC.md`.
 - The privacy-contract commit is self-contained so it can be re-applied after upstream syncs.
 
 ## Build (run from Android/src)
@@ -26,6 +32,7 @@ Full decisions: `docs/DECISIONS.md`. Phase log: `docs/LEARNINGS.md`. Traffic: `d
 export ANDROID_HOME=/opt/android-sdk     # cloud VM; see below if missing
 ./gradlew assembleDebug                  # debug APK
 ./gradlew :app:testDebugUnitTest         # JVM unit tests (pure logic)
+./gradlew -p build-logic test            # tests of the privacy guard and APK check rules
 ./gradlew :app:privacyGuard              # fails on forbidden deps/plugins; prints deps + licenses
 ./gradlew :app:checkCiApk                # APK check (dex, native, logs, manifest); runs with assembleCi
 ./gradlew :app:updateThirdPartyLicenses  # regenerate the in-app licenses list after dep changes
@@ -43,7 +50,9 @@ building more than one variant, and `./gradlew --stop` before switching worktree
   loop guard, prompt builder) and hand the owner an on-device checklist.
 
 ## CI
-- `.github/workflows/build-apk.yml`: on push to `claude/phone-agent**`, runs the guard, unit
-  tests and `assembleCi`, then publishes the APK to the rolling pre-release `phoneagent-ci`.
+- `.github/workflows/build-apk.yml`: on push to `claude/phone-agent**` and `upstream-sync-**`, runs
+  the rule tests, the guard, unit tests and `assembleCi`, then publishes the APK to a rolling
+  pre-release: `phoneagent-ci` for `claude/phone-agent-ik31nz` only, `phoneagent-ci-sync` for any
+  other branch.
   Pushes that change only `docs/` or Markdown outside `Android/src` skip it.
 - Signing secrets (owner adds later): KEYSTORE_B64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
