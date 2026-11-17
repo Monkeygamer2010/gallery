@@ -576,5 +576,11 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
 - **Losing the key:** Android installs an update only when it is signed with the same key. A lost
   key means a new one, a new pinned certificate, and every installed copy uninstalled once, which
   deletes downloaded models, settings, the accessibility enablement and the tile.
+- **Secrets are masked everywhere.** GitHub replaces every secret's value with `***` in the logs
+  and drops a job output that contains one. The key alias is a word in the package, branch and tag
+  names, so it shows as `***` in many log lines, and the workflow passes only neutral values
+  ("main" or "sync", "release" or "throwaway", the certificate) from the build job to the publish
+  job. Keeping `KEY_ALIAS` as a plain repository variable instead of a secret would avoid the
+  masking; it is the owner's choice.
 - Local builds (`./gradlew assembleCi`) still sign with the keystore named by
   `PHONEAGENT_KEYSTORE_FILE` plus the three passwords, or else the debug key; they are not published.

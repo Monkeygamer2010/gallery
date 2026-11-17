@@ -201,6 +201,9 @@ Each was resolved in 1.0.23 as recorded in `docs/DECISIONS.md`; the same files w
 - **CI caches are per branch.** Before the signing secrets existed (until 2026-11-17), each branch
   signed with its own cached debug key, so branch APKs didn't install over each other. One key now
   signs every branch.
+- **Secret values are masked.** GitHub drops a job output that contains a secret's value and shows
+  `***` for it in logs; the key alias is a word in the tag names. Pass only neutral values between
+  jobs (run 30 lost its tag this way and stopped before publishing).
 - **Startup auto-downloads.** `ModelManagerViewModel.startAutoDownloadModels()` downloads at startup
   every model whose runtime sets `autoDownloadsOnStartup`. Only AICore does, and AICore models are
   skipped. If upstream sets it for another runtime, downloads would start by themselves: check it at
