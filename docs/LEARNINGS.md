@@ -1237,3 +1237,124 @@ will most likely fail with "App not installed" (conflicting package).
 
 Wait for your retest. If it passes: merge into `claude/phone-agent-ik31nz` (steps in the status),
 then Phase 3.
+
+## Signing with the owner's key (2026-11-17)
+
+A CI-and-docs pass on the upstream sync: no app code, no agent changes, nothing merged.
+
+### What changed
+
+- The owner set the four signing secrets. Both branches were rebuilt with them: the sync branch
+  by pushes of its new workflow (run 30 for `a202ac0`, run 31 for `46218a8`), the main build branch
+  by a re-run of its last run (run 27 attempt 2, `19f7954`), with no commit on it. Each published to
+  its own pre-release as before.
+- Run 30 signed with the owner's key (its certificate matched the pin) but did not publish: GitHub
+  drops a job output that contains a secret's value, and the key alias is a word in the tag names,
+  so the publish step got an empty tag and its guard stopped it before touching any release.
+  `46218a8` passes "main" or "sync" between the jobs instead; run 31 published. The same masking
+  shows the alias as `***` in log lines; keeping `KEY_ALIAS` as a repository variable instead of a
+  secret would avoid that (the owner's choice).
+- Sync branch workflow (`a202ac0`; the main branch gets it with the merge): one step alone sees
+  the secrets. It decodes the keystore into a private temp folder, re-signs Gradle's APK with
+  `apksigner` (scheme v2, as Gradle signs) and deletes the keystore on every exit; a cleanup step
+  at the end of the job deletes it again, even when the job failed or the checkout never ran.
+  Gradle gets no secret. The certificate's SHA-256 is printed in the log and in the release notes
+  and must equal the pinned `RELEASE_CERT_SHA256`, or the build fails and nothing is published.
+  Without the secrets a run compiles, tests and checks, but uploads and publishes nothing (the
+  publish job fails with a message). A wrong secret is named in plain words, never printed. The
+  cached debug key is gone.
+- Tested here before pushing, with a throwaway test keystore: missing secrets, a key other than
+  the pinned one, the pinned key, text that isn't base64, base64 of a non-keystore, a wrong
+  keystore password, a wrong alias, a wrong key password, and a JKS keystore. Every case gave the
+  intended result and message; no test password was printed and no keystore was left behind.
+  Re-signing keeps every entry of the APK and its 16 KB page alignment.
+- Docs: DECISIONS.md "Signing", UPSTREAM_SYNC.md "Signing" and a new pitfall, SECURITY.md,
+  CLAUDE.md.
+
+### Signing certificates read from the published APKs
+
+Read with `apksigner verify --print-certs` and `aapt2 dump badging` from the APKs downloaded from
+the pre-releases:
+
+| Pre-release | Built from | Certificate SHA-256 | applicationId | versionCode | versionName |
+|---|---|---|---|---|---|
+| `phoneagent-ci` | `19f7954` (run 27, attempt 2) | `9A:A9:A0:CF:36:8E:49:CA:81:24:10:DE:5C:EC:F1:31:2D:9E:78:C2:12:E8:45:DE:D9:4C:7D:EB:5A:5E:D5:57` | `io.github.monkeygamer2010.phoneagent.dev` | 46 | `1.0.20-ci` |
+| `phoneagent-ci-sync` | `46218a8` (run 31) | `9A:A9:A0:CF:36:8E:49:CA:81:24:10:DE:5C:EC:F1:31:2D:9E:78:C2:12:E8:45:DE:D9:4C:7D:EB:5A:5E:D5:57` | `io.github.monkeygamer2010.phoneagent.dev` | 46 | `1.0.23-phoneagent.1-ci` |
+
+Both match the expected fingerprint, have one signer and use signature scheme v2. APK SHA-256:
+main `42ea6dab…d2d363f2` (227,030,113 bytes), sync `e7b55348…4b7bc157` (225,216,907 bytes).
+
+### Package name
+
+The package name appears in tracked files only as `io.github.monkeygamer2010.phoneagent` (the
+applicationId in `app/build.gradle.kts`, plus `.dev` for the ci build type) and in ids built on
+it, on both branches. No other spelling exists, and no package name, import, application id or
+manifest name in the Gradle, Kotlin, Java, XML, TOML or workflow files contains a non-ASCII
+character (the 14 lines with non-ASCII text are natural-language strings). The garbled name was in
+a chat message only. Nothing to fix on either branch.
+
+### Does Resume continue a download?
+
+Yes. When a download stops on a network error, the worker keeps the partial file. Tapping Resume
+starts a download that keeps the files (the planner sees the partial file), and the worker asks
+for the rest (`Range: bytes=<size of the partial file>-`, uncompressed) and appends it when the
+server answers with exactly that range, which Hugging Face does. It starts a file over from zero
+only if the server ignores the range or answers another one, or the partial file is gone
+(Discard, or the phone ran out of storage).
+
+### Retest list (Galaxy S25+)
+
+1. **Start over with the main build.**
+   Do: uninstall PhoneAgent (Settings > Apps > PhoneAgent > Uninstall). The installed copy is
+   signed with the old throwaway key and no new build can update it; uninstalling deletes its
+   downloaded models, settings, the accessibility enablement and the Quick Settings tile. Install
+   `PhoneAgent-ci.apk` from the `phoneagent-ci` pre-release (the main build), then set it up again:
+   turn on the PhoneAgent accessibility service, add the Quick Settings tile, set the tile model in
+   Model memory as before, and download Gemma-4-E4B and Gemma-4-E2B by tapping Download (on Wi-Fi).
+   Expect: it installs, the app shows 1.0.20-ci, both models download.
+   Send: "done", or what failed.
+2. **Update to the sync build.**
+   Do: download `PhoneAgent-ci.apk` from the `phoneagent-ci-sync` pre-release and open it.
+   Expect: Android offers to update the installed app (no "App not installed"). Afterwards the app
+   shows 1.0.23-phoneagent.1-ci, both models still show as downloaded, and the accessibility service
+   and the tile are still set up.
+   Send: whether it updated in place and whether the models are still there.
+3. **AI Chat on a downloaded model.**
+   Do: AI Chat > Gemma-4-E4B, ask a short question.
+   Expect: an answer; no microphone or read-aloud button; the config sheet has no Audio tab.
+   Send: anything that differs.
+4. **A download started by tap.**
+   Do: tap Download on a model you don't have yet, preferably a large one (step 5 can use it).
+   Expect: nothing downloads until you tap; after the tap it shows progress.
+   Send: nothing unless it misbehaves.
+5. **Download interruption.**
+   Do: start a download (the one from step 4 if it is still running). About halfway, note the size
+   shown and turn on airplane mode. When it has stopped, turn airplane mode off and wait two
+   minutes without touching the app. Then tap Resume.
+   Expect: it stops within about a minute and shows as paused with Resume and Discard; it stays
+   stopped after the network returns; after Resume it continues from about the size you noted, not
+   from zero, and finishes.
+   Send: the size you noted, the size shown while paused, and the size a few seconds after Resume.
+6. **Phone Agent, the Bologna task.**
+   Do: Phone Agent on Gemma-4-E4B, task "When was the University of Bologna founded?".
+   Expect: the answer 1088 with "Evidence: verified".
+   Send: Copy measurements, and Copy run log if it fails.
+7. **Quick Settings tile.**
+   Do: start a task from the tile, for example "Who wrote The Name of the Rose?".
+   Expect: it runs on the tile model; the run log's first line names the model the tile asked for
+   and the one that runs.
+   Send: the run log's first line.
+8. **Only one model loaded.**
+   Do: open AI Chat on a model and send a message; then open Phone Agent and start a task.
+   Expect: AI Chat's model is closed before Phone Agent loads its own; the measurements show one
+   engine's memory, as in Phase 2.2.
+   Send: Copy measurements.
+9. **Idle network.**
+   Do: with PCAPdroid capturing PhoneAgent only, leave PhoneAgent idle for 15 minutes (open, then in
+   the background).
+   Expect: no connection from PhoneAgent.
+   Send: PCAPdroid's connection list for PhoneAgent, or "none".
+
+### Next step
+
+Wait for the retest. If it passes: the merge into `claude/phone-agent-ik31nz`, then Phase 3.
