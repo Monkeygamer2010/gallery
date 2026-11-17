@@ -37,7 +37,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
-      tag: ${{ steps.release.outputs.tag }}
+      # "main" or "sync". Not the tag itself: GitHub drops a job output that contains a secret's
+      # value, and the key alias is a word in the tag names.
+      channel: ${{ steps.release.outputs.channel }}
       # "release" when the APK was signed with the key from the secrets, else "throwaway".
       signed: ${{ steps.sign.outputs.signed }}
       cert_sha256: ${{ steps.cert.outputs.sha256 }}
@@ -52,9 +54,9 @@ jobs:
       - name: Pick the pre-release
         id: release
         run: |
-          if [ "$GITHUB_REF" = "refs/heads/$MAIN_BRANCH" ]; then tag=phoneagent-ci; else tag=phoneagent-ci-sync; fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Publishes to: $tag"
+          if [ "$GITHUB_REF" = "refs/heads/$MAIN_BRANCH" ]; then channel=main; else channel=sync; fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Publishes to the $channel pre-release."
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -200,7 +202,7 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: publish-${{ needs.build.outputs.tag }}
+      group: publish-${{ needs.build.outputs.channel }}
       cancel-in-progress: false
     steps:
       # A push to our branches publishes only an APK signed with the owner's key.
@@ -228,10 +230,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.build.outputs.tag }}
+          CHANNEL: ${{ needs.build.outputs.channel }}
           CERT: ${{ needs.build.outputs.cert_sha256 }}
         run: |
-          case "$TAG" in phoneagent-ci|phoneagent-ci-sync) ;; *) echo "::error::unexpected tag $TAG"; exit 1 ;; esac
+          case "$CHANNEL" in
+            main) TAG=phoneagent-ci ;;
+            sync) TAG=phoneagent-ci-sync ;;
+            *) echo "::error::unexpected channel '$CHANNEL'"; exit 1 ;;
+          esac
           notes="Automatic build of ${GITHUB_REF_NAME} at ${GITHUB_SHA}. Not a release.
           Install: download PhoneAgent-ci.apk and open it on the phone (package suffix .dev).
           SHA-256: $(cut -d' ' -f1 apk/PhoneAgent-ci.apk.sha256)
