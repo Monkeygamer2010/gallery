@@ -55,4 +55,6 @@ building more than one variant, and `./gradlew --stop` before switching worktree
   pre-release: `phoneagent-ci` for `claude/phone-agent-ik31nz` only, `phoneagent-ci-sync` for any
   other branch.
   Pushes that change only `docs/` or Markdown outside `Android/src` skip it.
-- Signing secrets (owner adds later): KEYSTORE_B64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
+- Signing secrets are set (KEYSTORE_B64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD): one key signs
+  both pre-releases, certificate SHA-256 `9A:A9:…:5E:D5:57` (pinned as `RELEASE_CERT_SHA256` in the
+  workflow). Only the signing step sees them; never print, upload or commit them.

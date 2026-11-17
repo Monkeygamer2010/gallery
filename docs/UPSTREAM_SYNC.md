@@ -30,6 +30,18 @@ change in behaviour afterwards can be traced to the merge. Decisions behind each
   next merge doesn't turn into delete-versus-edit conflicts. Delete only where that isn't workable.
 - Every new host or URL, even a tappable link, goes in `docs/NETWORK.md`.
 
+## Signing
+
+- The four signing secrets exist (`KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`,
+  `KEY_PASSWORD`, set 2026-11-17). The same key signs both pre-releases, so a sync branch's APK
+  installs over the main build and back (same applicationId, versionCode 46, same key).
+- Expected certificate SHA-256: `9A:A9:A0:CF:36:8E:49:CA:81:24:10:DE:5C:EC:F1:31:2D:9E:78:C2:12:E8:45:DE:D9:4C:7D:EB:5A:5E:D5:57`. CI prints it
+  in the log and in the release notes and refuses to publish an APK signed with anything else.
+  Check a downloaded APK with `apksigner verify --print-certs PhoneAgent-ci.apk`.
+- The keystore lives only in the owner's password manager and in the GitHub secrets. Losing it
+  means every installed copy must be uninstalled once (Android refuses an update signed with another
+  key). Details: `docs/DECISIONS.md`, "Signing".
+
 ## Commands
 
 From the repository root (the upstream remote is fetch-only):
@@ -186,7 +198,12 @@ Each was resolved in 1.0.23 as recorded in `docs/DECISIONS.md`; the same files w
   `com/google/mediapipe/tasks/audio/`: data classes, present before the sync, not tasks-audio.
 - **`git diff <tag> -- <path>` reports an untracked file as deleted**; stage a restored upstream file
   before comparing it with the tag.
-- **CI caches are per branch.** A sync branch can't read the main branch's cached debug key, so
-  until the signing secrets exist its APK can't install over the main APK (or the other way round).
+- **CI caches are per branch.** Before the signing secrets existed (until 2026-11-17), each branch
+  signed with its own cached debug key, so branch APKs didn't install over each other. One key now
+  signs every branch.
+- **Startup auto-downloads.** `ModelManagerViewModel.startAutoDownloadModels()` downloads at startup
+  every model whose runtime sets `autoDownloadsOnStartup`. Only AICore does, and AICore models are
+  skipped. If upstream sets it for another runtime, downloads would start by themselves: check it at
+  every sync.
 - **versionCode.** Upstream's versionCode (52 at 1.0.23) is not taken: builds of every branch stay
   at the fork's versionCode so they install over each other in both directions.

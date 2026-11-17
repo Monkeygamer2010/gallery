@@ -160,10 +160,9 @@ it by editing this file.
 - `.github/workflows/build-apk.yml` builds on push to `claude/phone-agent**` and
   `upstream-sync-**` and publishes the APK to a rolling pre-release: `phoneagent-ci` for the main
   build branch (`claude/phone-agent-ik31nz`) only, `phoneagent-ci-sync` for every other branch.
-  Build type `ci` (applicationIdSuffix `.dev`) is signed from secrets
-  `KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`, falling back to the debug key
-  while they are unset (the owner adds them later; don't ask). Real release keys never go on
-  GitHub.
+  Build type `ci` (applicationIdSuffix `.dev`) is signed with the owner's key from the repository
+  secrets `KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` (set 2026-11-17; see
+  "Signing" below). A run without them still builds and tests, but publishes nothing.
 
 ## Assumptions made in Phase 0 (change any by editing here)
 
@@ -185,7 +184,7 @@ it by editing this file.
 - Upstream workflows `build_android.yaml` and `static.yml` are switched to manual-only
   (`workflow_dispatch`) so upstream syncs into `main` don't trigger them.
 - CI caches its debug signing key (Actions cache, not the repo) so successive CI APKs update in
-  place until the owner adds the signing secrets.
+  place until the owner adds the signing secrets. (Superseded on 2026-11-17: see "Signing".)
 - The README gets a short fork header above upstream's unchanged text; the full rewrite is Phase 6.
 - Upstream's first-run Google terms-of-service dialog and Gemma terms links are left as is for now
   (open question for Phase 6).
@@ -536,10 +535,9 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
   number once the main branch carries this workflow.
 - **LiteRT-LM stays 0.18.0.** Upstream moved to 0.18.1 for `maxOutputToken` on `sendMessage` and
   `sendMessageAsync`; 0.18.0 already has it, and the merged code compiles and passes against it.
-- **Signing (limitation):** until the signing secrets exist, the ci APK is signed with a debug key
-  cached per branch. A sync branch can't read the main branch's cache, so the sync APK and the main
-  APK have different signatures and don't install over each other. The secrets fix this for every
-  branch.
+- **Signing:** until the signing secrets existed, each branch signed with its own cached debug key,
+  so the sync APK and the main APK didn't install over each other. Resolved on 2026-11-17: one key
+  signs both pre-releases (see "Signing").
 - **CI:** sync branches build and publish to `phoneagent-ci-sync`; only the main build branch
   publishes to `phoneagent-ci`. The build-logic tests run before the guard. Upstream's workflows are
   unchanged in 1.0.23 and stay manual-only.
@@ -553,3 +551,30 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
   as before the merge).
 - The paused-download UI, the mobile-data confirmation, the no-connection message, the network
   monitor (connectivity callbacks during a download, no traffic of its own), upstream's home layout.
+
+## Signing (set up 2026-11-17)
+
+- **One key for every CI build.** The owner's keystore signs both pre-releases, `phoneagent-ci`
+  (main build) and `phoneagent-ci-sync` (other branches). With the same applicationId
+  (`io.github.monkeygamer2010.phoneagent.dev`) and versionCode (46), a build of either branch
+  installs over the other in both directions.
+- **Certificate SHA-256** (public): `9A:A9:A0:CF:36:8E:49:CA:81:24:10:DE:5C:EC:F1:31:2D:9E:78:C2:12:E8:45:DE:D9:4C:7D:EB:5A:5E:D5:57`.
+  The workflow pins it (`RELEASE_CERT_SHA256`); change it only together with the key.
+- **Where the key lives:** only in the owner's password manager and in four repository secrets,
+  `KEYSTORE_B64` (the keystore file, base64), `KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD`.
+  Never in the repository, a CI artifact, a log or a release.
+- **How CI uses it** (the sync branch's workflow since `a202ac0`; the main branch gets it with the
+  merge): one step decodes the keystore into a private temp folder, re-signs Gradle's APK with
+  `apksigner` (scheme v2, as Gradle signs) and deletes the keystore on every exit; a cleanup step at
+  the end of the job deletes it again even when the job failed. Gradle, its plugins and annotation
+  processors never see a secret (they build with a throwaway debug key). The certificate's SHA-256
+  is printed in the log and in the pre-release notes. An APK whose certificate isn't the pinned one
+  fails the build and is never published; without the secrets a run compiles and tests but uploads
+  and publishes nothing. When a secret looks wrong, the error names which one without printing it.
+  Until the merge, the main branch's older workflow passes the secrets to the Gradle build, which
+  signs with the same key.
+- **Losing the key:** Android installs an update only when it is signed with the same key. A lost
+  key means a new one, a new pinned certificate, and every installed copy uninstalled once, which
+  deletes downloaded models, settings, the accessibility enablement and the tile.
+- Local builds (`./gradlew assembleCi`) still sign with the keystore named by
+  `PHONEAGENT_KEYSTORE_FILE` plus the three passwords, or else the debug key; they are not published.

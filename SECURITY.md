@@ -60,9 +60,12 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   screens that show other apps' text (Phone Agent runs and results, spike tools, the task popup)
   are also marked secure (`FLAG_SECURE`: no screenshots, recordings or system capture) unless
   the owner turns on "Allow screenshots".
-- **[done]** CI uses first-party GitHub actions pinned to commit SHAs, read-only permissions
-  except the publish job, and signing secrets that are decoded to a temp file and deleted. Release
-  keys never go to GitHub; the owner signs releases locally.
+- **[done]** CI uses first-party GitHub actions pinned to commit SHAs and read-only permissions
+  except the publish job. The key that signs the CI builds is held only in the owner's password
+  manager and in four repository secrets. One CI step sees them: it decodes the keystore into a
+  private temp folder, signs the APK and deletes the keystore on every exit; no secret is printed,
+  uploaded or committed. CI publishes only an APK whose certificate matches the pinned SHA-256
+  (`docs/DECISIONS.md`, "Signing"), and nothing without the secrets.
 - **[done]** Downloads start only from a tap and are never restarted or resumed by anything
   automatic. Files of a model are written only inside the models folder; an archive is unpacked
   only inside its model's folder, every entry inside the folder it is unpacked to, with at most
@@ -158,6 +161,8 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   the re-appliable privacy commit exist for that.
 - A skill whose "Allow network" switch is on runs third-party code with network access; each
   call asks first.
+- The CI signing key is as safe as push access to this repository: a workflow pushed to any of its
+  branches can read the repository secrets.
 
 ## Reporting a problem
 
