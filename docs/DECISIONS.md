@@ -524,6 +524,13 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
 - **Model list:** the bundled snapshot is upstream's `1_0_23` list (required by the versionName). It
   keeps the 11 models of `1_0_20` byte for byte and adds 7 speech models, all skipped.
 - **Telemetry:** upstream's new events (model import, downloads, buttons) go to the no-op wrapper.
+- **MediaPipe stays pinned** (audit of the sync, 2026-11-18): `tasks-vision` 1.0.0 and
+  `tasks-retrieval` 1.1.0 (`tasks-core` 1.1.0), the versions the main build shipped, not upstream's
+  1.2.0. MediaPipe 1.2.0's `libmediapipe_tasks_jni.so` contains a native Clearcut usage-stats
+  uploader (`https://play.googleapis.com/log`, sent through `java.net.HttpURLConnection` over JNI)
+  that the Java telemetry stub cannot reach. The merged code builds and passes its tests against
+  the older versions. A newer MediaPipe is taken only after its native libraries, in every ABI,
+  pass the APK check's native rules (`docs/UPSTREAM_SYNC.md`).
 
 ### Versions, signing, CI
 

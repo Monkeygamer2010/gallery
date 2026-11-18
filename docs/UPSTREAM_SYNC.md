@@ -15,6 +15,7 @@ change in behaviour afterwards can be traced to the merge. Decisions behind each
 | Branch | `upstream-sync-1.0.23`; merge commit `76aea47` (a real merge, two parents) |
 | versionName / versionCode | `1.0.23-phoneagent.1` / `46` |
 | LiteRT-LM | `0.18.0` (unchanged; upstream uses 0.18.1, which the merged code does not need) |
+| MediaPipe | `tasks-vision` 1.0.0, `tasks-retrieval` 1.1.0 (pinned; upstream 1.2.0 ships a native Clearcut uploader) |
 | Not taken | upstream `main` past the tag (31 commits on 2026-11-17, untagged, heading to 1.0.24) |
 
 ## Rules for a sync pass
@@ -29,6 +30,10 @@ change in behaviour afterwards can be traced to the merge. Decisions behind each
 - Upstream features the fork doesn't ship stay **in the tree, out of the build** (below), so the
   next merge doesn't turn into delete-versus-edit conflicts. Delete only where that isn't workable.
 - Every new host or URL, even a tappable link, goes in `docs/NETWORK.md`.
+- **Pinned libraries stay pinned** until the newer version is checked: MediaPipe (`tasksVision`,
+  `tasksRetrieval` in `gradle/libs.versions.toml`) moves only after the newer version's native
+  libraries, in every ABI, pass the APK check's native rules with no new allowlist entry, or with
+  entries the owner approves. A library's Java side being clean says nothing about its native side.
 
 ## Signing
 

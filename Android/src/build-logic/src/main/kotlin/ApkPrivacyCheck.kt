@@ -90,6 +90,48 @@ internal object ApkRules {
   /** Native functions that load code by name; reported, since they can reach the above indirectly. */
   val DYNAMIC_LOADING_SYMBOLS = setOf("dlopen", "android_dlopen_ext", "dlsym")
 
+  /**
+   * What the strings of a native library may contain (see [NativeStrings]): every URL, host name,
+   * reference to a Java networking class and telemetry word found in a native library must match
+   * one of these, for that library (file name) or for every library ("*"). MediaPipe 1.2.0's native
+   * Clearcut uploader (https://play.googleapis.com/log, through java/net/HttpURLConnection over JNI)
+   * is what this rule exists for: native code can reach the network without importing a socket
+   * function. Adding an entry is a reviewed change to this file, with its reason.
+   */
+  val NATIVE_ALLOWLIST: List<NativeAllowance> =
+    listOf(
+      NativeAllowance("*", NativeKind.URL, prefix("https://android.googlesource.com/toolchain/llvm-project"),
+        "the NDK compiler's version string (.comment section); never used at run time"),
+      // LiteRT-LM bundles Dawn/WebGPU, Tint, TFLite, abseil and protobuf.
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, prefix("https://dawn.googlesource.com/dawn/"), "links in Dawn's error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, prefix("https://gpuweb.github.io/gpuweb/"), "WebGPU spec links in Dawn's error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, prefix("https://github.com/gpuweb/gpuweb"), "WebGPU spec links in Dawn's error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, prefix("https://github.com/KhronosGroup/Vulkan-Docs"), "Vulkan spec link in Dawn's error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, Regex("https?://crbug\\.com/.*"), "Chromium bug links in Dawn/Tint error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, prefix("https://issues.chromium.org/"), "Chromium bug links in Dawn error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, prefix("https://www.tensorflow.org/lite/"), "TFLite documentation links in error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.URL, Regex("https?://json-schema\\.org/draft.*"), "JSON Schema meta-schema identifiers, compared as strings"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.HOST, exact("crbug.com"), "Chromium bug references in Dawn/Tint error messages"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.HOST, exact("type.googleapis.com"), "protobuf Any type-URL prefix, not a host that is contacted"),
+      NativeAllowance("liblitertlm_jni.so", NativeKind.HOST, exact("ugcvy23.prod.google.com"), "a build machine's name in an embedded build path"),
+      // MediaPipe Tasks 1.0.0/1.1.0 (vision, retrieval).
+      NativeAllowance("libmediapipe_tasks_jni.so", NativeKind.URL, prefix("https://github.com/opencv/opencv/issues/"), "an OpenCV issue link in an error message"),
+      NativeAllowance("libmediapipe_tasks_jni.so", NativeKind.URL, prefix("https://www.tensorflow.org/lite/guide/"), "TFLite documentation links in error messages"),
+      NativeAllowance("libmediapipe_tasks_jni.so", NativeKind.HOST, exact("type.googleapis.com"), "protobuf Any type-URL prefix, not a host that is contacted"),
+      NativeAllowance("libmediapipe_tasks_jni.so", NativeKind.HOST, exact("google.golang.org"), "a Go package name in an embedded protobuf descriptor"),
+      NativeAllowance("libmediapipe_tasks_jni.so", NativeKind.JAVA_NET, exact("android/net/Uri"), "the URI value class (parsing only, no I/O)"),
+      NativeAllowance("libsqlite_vector_store_jni.so", NativeKind.HOST, Regex("type\\.googleapis\\.com|type\\.googleprod\\.com"), "protobuf type-URL prefixes, not hosts that are contacted"),
+      NativeAllowance("libsqlite_vector_store_jni.so", NativeKind.JAVA_NET, exact("android/net/Uri"), "the URI value class (parsing only, no I/O)"),
+      NativeAllowance("libsqlite_vector_store_jni.so", NativeKind.WORD,
+        Regex(".*(GmsTfLiteLogger|TfLiteLoggerForJni).*|logTfLiteTelemetryEvent|getFlag(LiteRtTelemetryEnabled|NnapiSlEnableTelemetry|TfliteEnableTelemetryProfiler)"),
+        "TFLite's hooks into Play services' TFLite logger: JNI calls on an object that only Play services' " +
+          "TFLite Java library can hand over; that library is forbidden and absent (no Lcom/google/android/gms/ class)"),
+    )
+
+  private fun prefix(p: String) = Regex(Regex.escape(p) + ".*")
+
+  private fun exact(s: String) = Regex(Regex.escape(s))
+
   /** Permissions the app may request. Adding one is a reviewed change to this file. */
   val APPROVED_PERMISSIONS =
     setOf(
@@ -242,6 +284,7 @@ abstract class ApkPrivacyCheckTask : DefaultTask() {
         val sourceFiles = mutableMapOf<String, String?>()
         val entries = mutableListOf<String>()
         var dexCount = 0
+        var nativeLibraries = 0
         for (entry in zip.entries()) {
           val name = entry.name
           entries += name
@@ -251,8 +294,11 @@ abstract class ApkPrivacyCheckTask : DefaultTask() {
             defined += dex.definedClasses
             logMethods += dex.logMethods
             sourceFiles += dex.sourceFiles
-          } else if (name.startsWith("lib/") && name.endsWith(".so")) {
-            val imports = ElfImports.read(zip.getInputStream(entry).use { it.readBytes() })
+          } else if (name.endsWith(".so")) {
+            val bytes = zip.getInputStream(entry).use { it.readBytes() }
+            nativeLibraries++
+            problems += NativeStrings.problems(name, bytes)
+            val imports = ElfImports.read(bytes)
             if (imports == null) {
               problems += "$name: cannot read its dynamic symbol table"
               continue
@@ -282,7 +328,7 @@ abstract class ApkPrivacyCheckTask : DefaultTask() {
           val left = logMethods.intersect(ApkRules.STRIPPED_LOG_METHODS)
           if (left.isNotEmpty()) problems += "debug logging left in a $type build: Log.$left"
         }
-        notes += "${apk.name}: $dexCount dex files, ${defined.size} classes"
+        notes += "${apk.name}: $dexCount dex files, ${defined.size} classes, $nativeLibraries native libraries (strings scanned)"
       }
     }
 
@@ -562,6 +608,70 @@ internal class DexSummary(
         }
       }
       return out.toString()
+    }
+  }
+}
+
+internal enum class NativeKind(val label: String) {
+  URL("URL"),
+  HOST("host name"),
+  JAVA_NET("reference to Java networking class"),
+  WORD("telemetry string"),
+}
+
+/** One approved finding in the strings of a native library ([ApkRules.NATIVE_ALLOWLIST]). */
+internal data class NativeAllowance(val library: String, val kind: NativeKind, val match: Regex, val reason: String) {
+  fun allows(libraryName: String, finding: NativeStrings.Finding) =
+    (library == "*" || library == libraryName) && kind == finding.kind && match.matches(finding.value)
+}
+
+/**
+ * The printable strings of a native library, searched for what would let it reach the network
+ * without importing a socket function: URLs, host names, Java networking classes it could call
+ * through JNI (java/net, javax/net, android/net) and telemetry words such as "clearcut". This
+ * shows what is in the file, not what the code does at run time.
+ */
+internal object NativeStrings {
+  data class Finding(val kind: NativeKind, val value: String)
+
+  private val printable = Regex("[\\x20-\\x7e]{6,}")
+  private val scheme = Regex("(?i)(?:https?|wss?|ftp)://")
+  private val urlChars = Regex("[^\\s\"'<>\\\\`{}|^]*")
+  private val host =
+    Regex(
+      "(?<![A-Za-z0-9_.\\-/])(?:[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?\\.)+" +
+        "(?:com|net|org|io|dev|app|ai|co|info|me|cloud)(?![A-Za-z0-9_\\-]|\\.[A-Za-z0-9])"
+    )
+  private val javaNet = Regex("(?:java|javax)[/.]net[/.][A-Za-z0-9_$]+(?:[/.][A-Z][A-Za-z0-9_$]*)?|android[/.]net[/.][A-Za-z0-9_$]+")
+  private val words = Regex("(?i)clearcut|playlog|firebase|crashlytics|app-?measurement|google-analytics|telemetry")
+
+  fun scan(bytes: ByteArray): Set<Finding> {
+    val found = sortedSetOf<Finding>(compareBy({ it.kind }, { it.value }))
+    // ISO-8859-1 maps every byte to one char, so offsets and printable runs stay exact.
+    for (run in printable.findAll(String(bytes, Charsets.ISO_8859_1))) {
+      val s = StringBuilder(run.value)
+      // URLs: each starts at a scheme and ends at the next scheme or a character URLs don't contain,
+      // so a URL glued to another can't hide behind an approved one.
+      val starts = scheme.findAll(run.value).map { it.range.first }.toList()
+      for ((i, start) in starts.withIndex()) {
+        val end = starts.getOrNull(i + 1) ?: run.value.length
+        val raw = urlChars.matchAt(run.value.substring(start, end), 0)?.value.orEmpty()
+        val url = raw.trimEnd('.', ',', ';', ':', ')')
+        if (url.length > url.indexOf("://") + 3) found += Finding(NativeKind.URL, url)
+        for (k in start until start + raw.length) s.setCharAt(k, ' ') // host names outside URLs only
+      }
+      host.findAll(s).forEach { found += Finding(NativeKind.HOST, it.value) }
+      javaNet.findAll(run.value).forEach { found += Finding(NativeKind.JAVA_NET, it.value.replace('.', '/')) }
+      if (words.containsMatchIn(run.value)) found += Finding(NativeKind.WORD, run.value)
+    }
+    return found
+  }
+
+  /** The findings in [bytes] that [ApkRules.NATIVE_ALLOWLIST] doesn't approve, as problem texts. */
+  fun problems(entryName: String, bytes: ByteArray, allowlist: List<NativeAllowance> = ApkRules.NATIVE_ALLOWLIST): List<String> {
+    val library = entryName.substringAfterLast('/')
+    return scan(bytes).filterNot { f -> allowlist.any { it.allows(library, f) } }.map { f ->
+      "$entryName contains a ${f.kind.label} that is not approved: '${f.value.take(160)}'"
     }
   }
 }

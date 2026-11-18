@@ -35,8 +35,12 @@ moshi = "1.15.2"
 ksp = "2.3.6"
 mcp = "0.8.0"
 ktor = "3.4.3"
-tasksVision = "1.2.0"
-tasksRetrieval = "1.2.0"
+# PhoneAgent fork: MediaPipe stays pinned to the versions the main build shipped before the 1.0.23
+# sync (upstream: 1.2.0 for both). MediaPipe 1.2.0's native library carries a Clearcut usage-stats
+# uploader to play.googleapis.com that the Java telemetry stub cannot reach. Raise these only after
+# the newer version's native libraries pass checkApk's native rules (docs/UPSTREAM_SYNC.md).
+tasksVision = "1.0.0"
+tasksRetrieval = "1.1.0"
 media3 = "1.11.1"
 coil = "2.7.0"
 androidxPdf = "1.0.0-beta01"
