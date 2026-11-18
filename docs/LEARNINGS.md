@@ -1142,10 +1142,13 @@ Recipe for the next sync: `docs/UPSTREAM_SYNC.md`.
 
 Text-to-speech, speech recognition and dictation, the XR language teacher and AICore: 180 source
 files and 8 assets on one list (`app/phoneagent-excluded-sources.txt`), plus inert stand-ins with the
-names upstream's other code uses. Removed from the app: read aloud in chats, the chat microphone,
-hold-to-dictate in Tiny Garden and Mobile Actions, the config sheet's Audio tab and its promo, the
-model manager's speech models tab (and the 7 speech models of the 1.0.23 list), the speech engine
-setting, the XR task and its assets. The APK check proves none of their classes or assets ships.
+names upstream's other code uses. Removed from the app: read aloud in chats, the chat dictation
+button, hold-to-dictate in Tiny Garden and Mobile Actions, the config sheet's Audio tab and its
+promo, the model manager's speech models tab (and the 7 speech models of the 1.0.23 list), the
+speech engine setting, the XR task and its assets. The APK check finds their classes (by package
+and source-file name) and assets if they ship. *(Corrected by the 2026-11-18 audit: this said
+"the chat microphone" and "proves"; Record audio clip and Audio Scribe stay, and the check
+recognizes files by name, not content.)*
 
 ### Privacy diff against the main build (APK of `19f7954` against this branch's APK)
 
@@ -1162,10 +1165,13 @@ setting, the XR task and its assets. The APK check proves none of their classes 
   `PdfDocumentServiceImpl` (not exported, isolated process, no intent filter); exported
   components, intent filters and `<queries>` identical. Upstream's `GlassesTapActivity` and its
   text-to-speech and glasses `<queries>` are not declared.
-- **Hosts:** none new. Every network, link and browser call site was compared with the previous
-  build. New URL strings only in the bundled model list (the skipped speech models' "learn more"
-  pages on `developers.google.com`), never shown. Nothing new connects by itself.
+- **Hosts:** none new in Kotlin, dex and assets. Every network, link and browser call site there
+  was compared with the previous build. New URL strings only in the bundled model list (the
+  skipped speech models' "learn more" pages on `developers.google.com`), never shown. *(Corrected
+  by the 2026-11-18 audit: native code wasn't compared. MediaPipe 1.2.0's native library added
+  `https://play.googleapis.com/log`; MediaPipe is now pinned back.)*
 - **Telemetry:** upstream's new events go to the no-op wrapper; Firebase isn't on the classpath.
+  *(Corrected: MediaPipe 1.2.0's native Clearcut uploader was not covered; see the audit entry.)*
 - **Downloads:** only from a tap; never resumed at startup, by the scheduler or when the network
   returns; the token only to Hugging Face over https; files only inside the models folder.
 - **Zip extraction:** entries only inside the unzip folder (upstream's check), the unzip folder only
@@ -1218,8 +1224,9 @@ will most likely fail with "App not installed" (conflicting package).
 2. **Model download by tap:** download Gemma-4-E2B (or E4B). Turn on flight mode mid-download: it
    shows paused and stays paused when the network is back, until you tap Resume. Force-stop the app
    mid-download and reopen: no resume by itself.
-3. **AI Chat** on the downloaded model: a short exchange; there's no microphone or read-aloud
-   button, and the config sheet has no Audio tab.
+3. **AI Chat** on the downloaded model: a short exchange; there's no dictation or read-aloud
+   button, and the config sheet has no Audio tab. *(Corrected: the + menu's Record audio clip
+   stays.)*
 4. **Phone Agent:** the Bologna task (University of Bologna founded, Wikipedia): 1088, evidence
    verified.
 5. **Quick Settings tile:** a task from the tile on the tile model.
@@ -1321,7 +1328,8 @@ only if the server ignores the range or answers another one, or the partial file
    Send: whether it updated in place and whether the models are still there.
 3. **AI Chat on a downloaded model.**
    Do: AI Chat > Gemma-4-E4B, ask a short question.
-   Expect: an answer; no microphone or read-aloud button; the config sheet has no Audio tab.
+   Expect: an answer; no dictation or read-aloud button; the config sheet has no Audio tab.
+   *(Corrected: the + menu's Record audio clip stays.)*
    Send: anything that differs.
 4. **A download started by tap.**
    Do: tap Download on a model you don't have yet, preferably a large one (step 5 can use it).
@@ -1358,3 +1366,125 @@ only if the server ignores the range or answers another one, or the partial file
 ### Next step
 
 Wait for the retest. If it passes: the merge into `claude/phone-agent-ik31nz`, then Phase 3.
+
+## Audit of the 1.0.23 sync and fix pass (2026-11-18)
+
+A read-only security and privacy audit of `upstream-sync-1.0.23` at `4c38e44`, then a fix pass on
+the same branch. Verdict of the audit: not yet mergeable (native telemetry in MediaPipe 1.2.0,
+privacy docs that said the opposite). Nothing was pushed to `claude/phone-agent-ik31nz` or `main`,
+no workflow file changed, and no run of the main branch was re-run.
+
+### Seven earlier conclusions that were wrong
+
+1. "No new host, nothing new connects by itself" and "MediaPipe's usage stats are replaced by a
+   stub": wrong for MediaPipe 1.2.0, whose native library has its own Clearcut uploader. The sync
+   review compared Kotlin and dex only.
+2. "The chat microphone is removed" / "no microphone button": wrong. Only dictation is gone; Record
+   audio clip, Audio Scribe and `RECORD_AUDIO` stay.
+3. "The APK check proves none of the excluded code ships" and "exactly the approved permissions and
+   intent filters": overstated; three changes got past it in real builds (below).
+4. During the sync, a progress message said there would be seven stand-in files. There are six.
+5. The audit's own first pass called the startup cancelling of non-download work (leftover Smart
+   Album indexing) new in the sync. The main build does it too (`cancelAllWork()` at every start).
+6. "A refused archive is deleted with what was unpacked": the files were, the folders stayed.
+7. "Gradle and its plugins never see a secret": true for the environment of the Gradle steps only;
+   the signing step shares the runner with the build.
+
+### Findings and what was done
+
+| # | Finding | Resolution | Commit |
+|---|---|---|---|
+| B1 | MediaPipe 1.2.0's `libmediapipe_tasks_jni.so`: Clearcut uploader to `https://play.googleapis.com/log` through `java.net`/`javax.net.ssl` over JNI; past the stub, the guard and the APK check | MediaPipe pinned to `tasks-vision` 1.0.0 / `tasks-retrieval` 1.1.0 (merged code builds, tests pass); the APK check scans every native library's strings against an allowlist | `b4c269c` |
+| N3 | APK check passed a `<uses-permission-sdk-23>` permission, an extra https deep link on an approved filter, and a renamed copy of excluded code | Every permission element counts; filters compared whole and exactly; only allowed source sets; stand-in packages hold only stand-ins; no `android.speech` references; packaged manifest checked too; install and bundle run the check | `d4985df` |
+| N5 | An extra-data archive in prefix mode replaced the model file (case 11); a 1000:1 entry was unpacked (17); a refusal left folders (21) | No entry may replace a file of the model or duplicate another (ignoring case); 100:1 cap above 1 MiB; per-entry declared sizes enforced; created folders removed; 21 hostile archives as regression tests | `c3cba18` |
+| N6 | Closing a licence page restarted the download | It ends the pending download, drops the licence refusal, shows "Tap Download"; the next tap downloads | `d335de9` |
+| N7 | AppAuth's redirect activity exported with a placeholder scheme | Removed from the manifest; login still refuses with the token message | `abc9521` |
+| N9 | No final size check before rename | Known gap, recorded (per-file sizes aren't passed to the worker; list sizes not confirmed exact) | docs |
+| B2 | Privacy docs contradicted the build | NETWORK, SECURITY, DECISIONS, UPSTREAM_SYNC, CLAUDE and this file corrected | docs |
+| N1/N2 | Main branch's old workflow gives the signing passwords to the whole Gradle step (it ran once with them: run 27 attempt 2); the new one signs on the same runner as the build | Open, owner's decision (no workflow changes in this pass); documented as residual risk | — |
+| N4 | Chat microphone and `RECORD_AUDIO` still in the build; Mobile Actions and Tiny Garden ask for it on open | Open, owner's decision (DECISIONS.md, "Open decisions") | — |
+| N8, N10, N11 | Token kept in WorkManager's input data; leftover Smart Album work cancelled at start; upstream's manual-only workflows unpinned | Unchanged (pre-existing, low) | — |
+
+### Native libraries: main build, sync with MediaPipe 1.2.0, sync with MediaPipe pinned
+
+The rule's own scan of every native library in every ABI (each library is the same in all its
+ABIs; LiteRT-LM ships arm64-v8a and x86_64 only). This shows what the files contain, not what the
+code does at run time.
+
+| Library | Main build | Sync, MediaPipe 1.2.0 | Sync, pinned (this pass) |
+|---|---|---|---|
+| `libmediapipe_tasks_jni.so` | 4 URLs (compiler string, OpenCV issue, 2 TFLite docs); hosts github.com, www.tensorflow.org, type.googleapis.com, google.golang.org; Java: `android/net/Uri` | 5 URLs incl. **`https://play.googleapis.com/log`**; Java: **`java/net/URL`, `URLConnection`, `HttpURLConnection`, `javax/net/ssl/HttpsURLConnection`, `SSLContext`, `SSLSocketFactory`, `KeyManager`, `TrustManager`, `android/net/TrafficStats`**, `android/net/Uri`; **34 Clearcut/playlog strings**; 44 findings fail the rule | same as main |
+| `libsqlite_vector_store_jni.so` | compiler URL; type.googleapis.com, type.googleprod.com; `android/net/Uri`; 12 strings of TFLite's Play-services logger hooks (approved: inert without Play services' TFLite Java classes) | compiler URL; type.googleapis.com | same as main |
+| `liblitertlm_jni.so` | 217 URLs: Dawn/WebGPU/Vulkan spec and Chromium bug links, TFLite docs, JSON Schema ids, compiler string; type.googleapis.com, a build host name | same | same |
+| `libandroidx.graphics.path.so`, `libdatastore_shared_counter.so`, `libicing.so`, `libimage_processing_util_jni.so`, `libsurface_util_jni.so` | compiler URL only | same | same |
+
+The pinned ci build's 30 native libraries are byte-identical to the main build's.
+
+### Measurements
+
+- Tests: 172 before (159 app, 4 telemetry-stub, 9 build-logic), **210 after** (186 app, 4
+  telemetry-stub, 20 build-logic), all passing. New: 21 hostile archives plus 2 (HostileArchives),
+  licence page (1), login guard (3), native strings (5), permission elements, whole filters,
+  speech references, packaged manifest, source sets and the redirect activity (6).
+- Real builds of the three slips (sdk-23 permission, https filter on the approved AppAuth activity,
+  renamed copy via `src/debug` and inside the stand-ins) now fail the APK check.
+- APK (ci build): 225,216,907 bytes (published sync APK with MediaPipe 1.2.0) → 233,386,567 bytes
+  locally with the pin (debug key; MediaPipe 1.1.0's vector store library is larger); the main
+  build's was 227,030,113.
+
+### Untestable without a phone
+
+Whether MediaPipe 1.2.0's uploader ever sent anything (no such build is used any more); that
+Scrapbook, Smart Album and Video Moment Finder work with MediaPipe 1.0.0/1.1.0 under the merged
+1.0.23 code; the licence-page flow; that login refusal shows its message; everything Phone Agent
+does; the idle network check.
+
+### Retest list (Galaxy S25+), sync build from the `phoneagent-ci-sync` pre-release
+
+1. **Update in place.** Do: download `PhoneAgent-ci.apk` from `phoneagent-ci-sync` and open it.
+   Expect: it updates the installed PhoneAgent (no "App not installed"); the app shows
+   1.0.23-phoneagent.1-ci; downloaded models, the accessibility service and the tile stay set up.
+   Send: whether it updated in place and the models are still there.
+2. **MediaPipe tiles.** Do: on Home, find Scrapbook, Smart Album and Video Moment Finder. Use
+   Scrapbook's Magic touch on a photo, let Smart Album index and search for "dog", run one Video
+   Moment Finder search (download their models first if needed). Expect: all three tiles are
+   there (none was removed) and work, now on MediaPipe 1.0/1.1. If Smart Album reports a problem
+   with an index made by an earlier build, clear it and index again. Send: which tiles work, and
+   any error text.
+3. **MediaPipe network check.** Do: with PCAPdroid capturing PhoneAgent only, repeat one action in
+   each of the three tiles (models already downloaded). Expect: no PhoneAgent connection, in
+   particular none to `play.googleapis.com`. Send: PCAPdroid's connection list, or "none".
+4. **Licence-gated download.** Do: paste a Hugging Face read token in Settings if none is set. Tap
+   Download on a gated model whose licence you haven't accepted on huggingface.co (for example
+   Gemma3-1B-IT). On the licence sheet, open the licence page, accept the licence, close the page.
+   Expect: the message "Licence page closed. Tap Download to download the model."; nothing
+   downloads by itself; your next tap on Download downloads it. Send: whether anything started
+   before your tap and whether the tap downloaded (or "no gated model left to try").
+5. **AI Chat.** Do: AI Chat > Gemma-4-E4B, ask a short question. Expect: an answer; no dictation or
+   read-aloud button; the config sheet has no Audio tab; the + menu still has Record audio clip
+   (expected, an open decision). Send: anything that differs.
+6. **A download started by tap.** Do: tap Download on a model you don't have, preferably a large
+   one (step 7 uses it). Expect: nothing downloads until you tap; then it shows progress. Send:
+   nothing unless it misbehaves.
+7. **Airplane mode and Resume.** Do: about halfway, note the size, turn on airplane mode; once it
+   has stopped, turn it off and wait two minutes without touching the app; then tap Resume. Expect:
+   it stops within about a minute and shows as paused with Resume and Discard; it stays stopped
+   when the network returns; after Resume it continues from about the noted size and finishes.
+   Send: the noted size, the size while paused, the size a few seconds after Resume.
+8. **Bologna task.** Do: Phone Agent on Gemma-4-E4B, task "When was the University of Bologna
+   founded?". Expect: 1088 with "Evidence: verified". Send: Copy measurements, and Copy run log if
+   it fails.
+9. **Quick Settings tile.** Do: start "Who wrote The Name of the Rose?" from the tile. Expect: it
+   runs on the tile model; the run log's first line names the model the tile asked for and the
+   one that runs. Send: that first line.
+10. **One engine loaded.** Do: open AI Chat on a model and send a message, then start a Phone Agent
+    task. Expect: AI Chat's model is closed before Phone Agent loads its own; the measurements show
+    one engine's memory. Send: Copy measurements.
+11. **Idle network, 15 minutes.** Do: with PCAPdroid capturing PhoneAgent only, leave PhoneAgent
+    idle for 15 minutes (open, then in the background). Expect: no connection from PhoneAgent.
+    Send: the connection list, or "none".
+
+### Next step
+
+Wait for the owner's retest of the sync build; then the merge into `claude/phone-agent-ik31nz`
+(bringing the new workflow with it) and the open decisions.

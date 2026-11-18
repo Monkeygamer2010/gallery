@@ -31,26 +31,37 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 
 ### Privacy and supply chain
 - **[done]** Firebase, ML Kit/AICore, Play services TFLite and oss-licenses removed; MediaPipe's
-  usage-stats uploader replaced by a no-op stub; no network at startup or idle
-  (`docs/NETWORK.md`).
+  Java usage-stats uploader replaced by a no-op stub, and MediaPipe kept at 1.0.0/1.1.0 because
+  1.2.0's native library carries its own Clearcut uploader (`https://play.googleapis.com/log`)
+  that no stub can reach; no network at startup or idle (`docs/NETWORK.md`).
 - **[done]** `privacyGuard` build check fails on Firebase / Play services / Play Core / ML Kit /
   AICore / common analytics dependencies, local file dependencies, the google-services plugin,
-  and MediaPipe references the stub doesn't cover. `check<Variant>Apk` inspects every built APK
-  (dex classes, native imports, leftover debug logging, merged manifest: exactly the approved
-  permissions, approved intent filters and package-visibility entries only). The rules are
-  constants in build-logic with their own tests; CI requires both pass reports.
+  and MediaPipe references the stub doesn't cover. `check<Variant>Apk` (with every assemble,
+  install and bundle task) inspects every built APK: dex classes and references (no speech
+  recognition or text-to-speech classes), native imports and native strings (no unapproved URL,
+  host, Java networking class or telemetry word, every ABI), leftover debug logging, the source
+  sets, and the merged and the packaged manifest (exactly the approved permissions from every
+  permission element, exactly the approved intent filters compared whole, approved
+  package-visibility entries only). The rules are constants in build-logic with their own tests;
+  CI requires both pass reports. They inspect files, not run-time behaviour.
 - **[done]** Upstream merges: features the fork doesn't ship stay in the source tree but out of the
   build, on one exclusion list; since 1.0.23 these are text-to-speech, speech recognition,
-  dictation, the XR language teacher and AICore. The APK check fails if a class or an asset of one
-  of them is in the APK. Recipe: `docs/UPSTREAM_SYNC.md`.
+  dictation, the XR language teacher and AICore. The APK check fails if a class compiled from one of
+  their files (by package and source-file name), any non-stand-in class in their packages, one of
+  their assets, or any reference to the platform's speech classes is in the APK. It recognizes
+  files by name, not content. Recipe: `docs/UPSTREAM_SYNC.md`.
 - **[done]** Skill WebViews: no network unless the owner turns on a skill's "Allow network"
   switch, no access to app-private files, no WebRTC, camera and microphone denied, model-chosen
   script and page names confined to the skill's folder.
 - **[done]** MCP servers: only enabled ones, only while Agent Chat is visible.
 - **[done]** The Hugging Face token is sent only to Hugging Face hosts; secret fields are masked
   and never shown or logged.
-- **[done]** No remote images from rendered text; no Geocoder; no speech recognition or
-  text-to-speech at all (not in the build since the 1.0.23 sync).
+- **[done]** No remote images from rendered text; no Geocoder; no speech recognizer or
+  text-to-speech engine (not in the build since the 1.0.23 sync).
+- **Open, the owner's decision:** the chat microphone is still in the build: **Record audio clip**
+  in AI Chat and Agent Chat and the **Audio Scribe** tile record the microphone (`RECORD_AUDIO`)
+  for the on-device model, which can transcribe speech. On the phone only, nothing is sent. Mobile
+  Actions and Tiny Garden still ask for the microphone permission when they open, unused.
 - **[done]** No cleartext HTTP, no WebView metrics or Safe Browsing pings, no cloud backup or
   device-to-device transfer of app data.
 - **[done]** Removed upstream's FCM handler, which let any app make PhoneAgent open an arbitrary
@@ -64,13 +75,19 @@ privacy of sites the browser visits during a task (they see a normal private-bro
   except the publish job. The key that signs the CI builds is held only in the owner's password
   manager and in four repository secrets. One CI step sees them: it decodes the keystore into a
   private temp folder, signs the APK and deletes the keystore on every exit; no secret is printed,
-  uploaded or committed. CI publishes only an APK whose certificate matches the pinned SHA-256
-  (`docs/DECISIONS.md`, "Signing"), and nothing without the secrets.
+  uploaded or committed. No Gradle step has a secret in its environment, but the signing step runs
+  on the same runner right after the build (see the residual risks). CI publishes only an APK whose
+  certificate matches the pinned SHA-256 (`docs/DECISIONS.md`, "Signing"), and nothing without the
+  secrets. This is the sync branch's workflow: until the merge, the main build branch's older
+  workflow passes the passwords to the whole Gradle build and leaves the keystore on disk for all
+  its build steps.
 - **[done]** Downloads start only from a tap and are never restarted or resumed by anything
-  automatic. Files of a model are written only inside the models folder; an archive is unpacked
-  only inside its model's folder, every entry inside the folder it is unpacked to, with at most
-  20,000 entries and 16 GiB and never more than the archive declares. A refused archive is deleted
-  with whatever was unpacked from it.
+  automatic, also not when a gated model's licence page closes. Files of a model are written only
+  inside the models folder; an archive is unpacked only inside its model's folder, every entry
+  inside the folder it is unpacked to; no entry may replace a file of the model or name the same
+  file as another entry (ignoring case); at most 20,000 entries and 16 GiB, no entry over 1 MiB
+  compressed more than 100 to 1, and never more than the archive declares, per entry and in all. A
+  refused archive is deleted with the files and folders unpacked from it.
 - Model files are downloaded over HTTPS from Hugging Face at the commit pinned in the model list.
   Residual risk: no extra checksum check beyond that pin.
 
@@ -132,7 +149,8 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 
 ### Entry points
 - **[done]** Upstream's exported `com.google.ai.edge.gallery://` deep link is gone; app links are
-  accepted only through a non-exported alias.
+  accepted only through a non-exported alias. AppAuth's exported OAuth redirect activity is removed
+  while Hugging Face login is not configured.
 - **[done]** Tasks start only from text the owner types in the app or in the Quick Settings popup
   (handed over in memory, never in an intent). Deep links and intents from other apps can't start
   a task: the popup and the run service are not exported, and only the system can bind the tile.
@@ -162,7 +180,18 @@ privacy of sites the browser visits during a task (they see a normal private-bro
 - A skill whose "Allow network" switch is on runs third-party code with network access; each
   call asks first.
 - The CI signing key is as safe as push access to this repository: a workflow pushed to any of its
-  branches can read the repository secrets.
+  branches can read the repository secrets. It is also as safe as the build's dependencies: the
+  signing step runs on the same runner as the Gradle build, so a compromised plugin or library
+  could leave a process behind that reads it. A separate signing job that runs no repository code
+  would close that; the main build branch's older workflow is weaker still (it gives the passwords
+  to the whole Gradle build).
+- The native-library rules read strings, not code: a library could build a host name or URL from
+  pieces, or reach the network through code paths with no tell-tale string. MediaPipe and
+  LiteRT-LM stay pinned for this reason, and the phone test with PCAPdroid remains the run-time
+  check.
+- A model file is not checked against the size in the model list before it is renamed (only each
+  response's length against its Content-Length): a server that serves a short file whole would
+  leave a short model (`docs/UPSTREAM_SYNC.md`, known gaps).
 
 ## Reporting a problem
 

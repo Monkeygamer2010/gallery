@@ -9,18 +9,24 @@ Last full review: Phase 0.1 (2026-10-18), after an independent audit of Phase 0:
 call site in the Kotlin sources, the skill assets, the merged manifest, the dex files and the
 native libraries in the built APK. Phase 1 and Phase 2 added no network code; the APK check
 still finds no socket or DNS imports in native code. Upstream sync 1.0.23 (2026-11-17): every
-network, link and browser call site of the merged build compared with the previous build. No new
-host, and nothing new that connects by itself (details below each table).
+network, link and browser call site of the merged Kotlin and dex compared with the previous build;
+no new host there. **Correction (audit, 2026-11-18):** that review missed native code. MediaPipe
+1.2.0, which the merge brought in, ships a usage-stats uploader in its native library
+(`libmediapipe_tasks_jni.so`: Clearcut, `https://play.googleapis.com/log`, sending through
+`java.net.HttpURLConnection` over JNI). MediaPipe is now pinned back to the versions the main build
+shipped (`tasks-vision` 1.0.0, `tasks-retrieval` 1.1.0), whose native libraries contain no
+uploader, and the APK check scans the strings of every native library (below). Whether 1.2.0's
+uploader actually sent anything was never measured; no build that shipped it was used for it.
 
 ## What the app connects to
 
 | # | Who (code) | Host(s) | When | Owner-initiated? |
 |---|---|---|---|---|
 | 1 | Model download (`DownloadWorker`) | `huggingface.co` and its file CDN (`cdn-lfs*.huggingface.co`, `*.xethub.hf.co`); `dl.google.com` (Smart Album's sample photos, an optional extra file of EmbeddingGemma-2); `storage.googleapis.com` (Scrapbook's "Magic touch" model) | Tapping **Download** on a model. The Hugging Face token is sent only to `https://huggingface.co` and its subdomains | Yes |
-| 1a | Resume of an interrupted download | same as 1 | Only when you tap **Resume** on that model's paused download (or **Discard** to delete it). Nothing resumes at app start, in the background, when the network comes back or when the system reruns the work. While a download you started runs, a stalled connection is reopened to the same address and continues where it stopped. Without a connection a download doesn't start | Yes |
+| 1a | Resume of an interrupted download | same as 1 | Only when you tap **Resume** on that model's paused download (or **Discard** to delete it). Nothing resumes at app start, in the background, when the network comes back or when the system reruns the work. While a download you started runs, a stalled connection is reopened to the same address and continues where it stopped. Without a connection a download doesn't start. A gated model whose licence you open from the app downloads only when you tap **Download** again after closing the licence page | Yes |
 | 2 | "Refresh model list" (`phoneagent/modellist/ModelListStore.refresh`) | `raw.githubusercontent.com` | Settings > Model list > **Refresh model list** | Yes |
 | 3 | Import a model from a URL (`ModelImportDialog`) | For a Hugging Face URL: `huggingface.co/api` (model details); otherwise a 1-byte request to the URL you typed to read the file size. Then the download (row 1) | Importing by URL | Yes |
-| 4 | Hugging Face login (AppAuth) | `huggingface.co/oauth/*` | Not configured in this fork (placeholder client id): the app shows a message instead. Paste a token in Settings | — |
+| 4 | Hugging Face login (AppAuth) | `huggingface.co/oauth/*` | Not configured in this fork (placeholder client id): the app shows a message instead. Paste a token in Settings. AppAuth's exported redirect activity is removed from the manifest | — |
 | 5 | Agent Chat skills (JS skills in a WebView) | `SKILL.md` from a skill URL you add; for a skill whose **Allow network** switch you turned on: whatever its pages load (for example `query-wikipedia` calls `<lang>.wikipedia.org`, `interactive-map` shows Google Maps) | Adding a skill from a URL; running a skill with network allowed. Every such call asks first | Yes. **Allow network** is off for every skill by default |
 | 6 | Agent Chat MCP servers | the MCP server URLs you add | Adding a server; while Agent Chat is on screen, enabled servers only. Connections close when you leave Agent Chat or the app goes to the background. Every tool call asks first. A server on your local network would also need Android 17's `ACCESS_LOCAL_NETWORK` permission, which the app does not request, and `https` (cleartext is off) | Yes. None configured by default |
 | 7 | Links in the UI (`ClickableLink`, skill homepages, Tiny Garden credits, a gated model's licence page on `huggingface.co`) | any | Tapping a link opens it in your browser or a Custom Tab; the browser makes the connection (see "Traffic made by other apps") | Yes |
@@ -38,6 +44,12 @@ Nothing else from the app's own process. In particular:
   XR language teacher (glasses). Their code stays in the source tree; the APK check proves none of
   it is in the APK. The 7 speech models of upstream's model list are not offered, so their "learn
   more" links (`developers.google.com`) are never shown.
+- **Still in the build (on the phone only):** the chat microphone. AI Chat's and Agent Chat's
+  **+** menu has **Record audio clip**, and the **Audio Scribe** tile records too; both record the
+  microphone (`RECORD_AUDIO`) into memory and hand the clip to the on-device model, which can
+  transcribe speech. Nothing is sent anywhere. Mobile Actions and Tiny Garden still ask for the
+  microphone permission when they open, although nothing in them uses it any more. Whether the
+  microphone stays is an open decision for the owner (`docs/DECISIONS.md`).
 - **On the phone only:** PDF attachments in chats are rendered by `androidx.pdf` in an isolated
   process, which has no network access. Archives that come with a model are unpacked on the phone.
   The downloader's network monitor only listens to connectivity changes while a download runs.
@@ -47,9 +59,17 @@ Nothing else from the app's own process. In particular:
   `api.github.com`), Smart Album's separate sample download (`SampleAlbumStorageManager`), the
   Hugging Face explore screen (`HfExploreViewModel`), the featured-skills list (empty URL) and the
   example custom task.
-- **Native code:** no library in the APK imports socket or DNS functions (`./gradlew
-  :app:checkCiApk` verifies this on every build). LiteRT-LM and MediaPipe load GPU drivers by name
-  (`dlopen`), which the check reports.
+- **Native code:** no library in the APK imports socket or DNS functions, and none contains a
+  URL, host name, Java networking class (`java/net`, `javax/net`, `android/net`) or telemetry word
+  (`clearcut`, `playlog`, `firebase`, `telemetry`, ...) that the APK check's allowlist doesn't
+  approve for that library (`./gradlew :app:checkCiApk`, every build, every ABI). Native code can
+  reach the network without importing a socket function, through Java over JNI, as MediaPipe
+  1.2.0 did. The approved findings are documentation and bug links in error messages, compiler
+  version strings, protobuf type-URL prefixes, `android/net/Uri`, and TFLite's dormant hooks into
+  Play services' TFLite logger in the vector-store library (they need Play services' TFLite Java
+  classes, which the APK doesn't contain). This proves what is in the files, not what the code does
+  at run time; the phone test below covers run time. LiteRT-LM and MediaPipe load GPU drivers by
+  name (`dlopen`), which the check reports.
 - **WebView** (skills, Tiny Garden) runs with `android.webkit.WebView.MetricsOptOut=true` and
   `android.webkit.WebView.EnableSafeBrowsing=false`: no usage metrics, no Safe Browsing lookups.
 - `usesCleartextTraffic="false"`: plain `http://` is refused (an `http://` MCP server won't work).
@@ -87,7 +107,7 @@ PCAPdroid attributes that traffic to the other app, not to PhoneAgent.
 |---|---|---|---|
 | Links, skill homepages, credits | your default browser (Firefox) | only when you tap a link | Nothing at startup: the Hugging Face login service (AppAuth), which binds the browser's Custom Tabs service and warms it up, is created only when a login is actually started, and login is not configured |
 | Phone Agent tasks (Phase 2+) | Firefox | while a task you started runs | Pages open in private tabs only. Firefox's own telemetry settings apply; set them in Firefox. uBlock Origin set to run in private browsing blocks trackers on the pages |
-| Dictation, read aloud | the phone's speech recognizer and text-to-speech engine | never | Not in the build since the 1.0.23 sync: no microphone button, no hold-to-dictate, no read-aloud |
+| Dictation, read aloud | the phone's speech recognizer and text-to-speech engine | never | Not in the build since the 1.0.23 sync: no dictation button, no hold-to-dictate, no read-aloud. (The chat's **Record audio clip** and Audio Scribe record the microphone for the on-device model; no other app is involved.) |
 | Email, SMS, calendar, contacts, maps (Agent Chat skills, Mobile Actions) | your mail, messages, calendar, contacts and maps apps | after you tap **Allow once** | The other app opens with the content filled in; it sends nothing until you act in it (maps apps look up the place) |
 | Location names for photos | location services (Google Play services) | never | Removed: Smart Album shows raw coordinates |
 | Emoji fonts | font provider (Google Play services) | never | EmojiCompat's startup initializer is removed; the system emoji font is used |
@@ -96,7 +116,7 @@ PCAPdroid attributes that traffic to the other app, not to PhoneAgent.
 Android itself and other system services (connectivity checks, Play Store updates, time sync) make
 their own connections whatever PhoneAgent does.
 
-## MediaPipe usage stats: replaced by a stub
+## MediaPipe usage stats: replaced by a stub (Java), kept out by a version pin (native)
 
 MediaPipe Tasks (used by Scrapbook, Smart Album and Video Moment Finder) contains
 `com.google.mediapipe.tasks.core.logging.RemoteLoggingClient`. Every time a MediaPipe task starts it
@@ -128,6 +148,15 @@ What the fork does instead (owner decision, Phase 0):
   all from `com.google.mediapipe.tasks.core.logging`, all satisfied. The APK check then verifies
   that only the stub's classes exist in those packages in the built APK. A MediaPipe upgrade that
   needs more API therefore breaks the build instead of crashing a tile.
+- **Native side (audit of the 1.0.23 sync):** MediaPipe 1.2.0 moved usage logging into its native
+  library: `libmediapipe_tasks_jni.so` 1.2.0 contains `ClearcutLoggingClient`,
+  `PortableClearcutUploader`, `IonHttpClient::SendPostHttpRequestAsync`, the endpoint
+  `https://play.googleapis.com/log`, and JNI references to `java/net/URL`,
+  `java/net/HttpURLConnection`, `javax/net/ssl/HttpsURLConnection` and `javax/net/ssl/SSLContext`.
+  The stub can't reach native code. The fork therefore keeps MediaPipe at `tasks-vision` 1.0.0 and
+  `tasks-retrieval` 1.1.0 (`tasks-core` 1.1.0), the main build's versions, whose native libraries
+  hold none of this; the merged code builds and passes its tests against them. The APK check's
+  native rules fail on 1.2.0's library (44 findings per ABI) and pass on the pinned one.
 
 ## Build-time checks and approved exceptions
 
@@ -140,14 +169,30 @@ loosen them, and the build stops if a build script disables either check.
   uploader. It also fails on local file dependencies and on the google-services / oss-licenses
   plugins. It prints every packaged library with its license and checks that the in-app license
   list (`app/src/main/assets/phoneagent/third_party_licenses.tsv`) is current.
-- `check<Variant>Apk` runs with every `assemble<Variant>` and inspects the built APK: no forbidden
-  classes in any dex file, telemetry classes only from `:telemetry-stub`, no class or asset of the
-  upstream features that are out of the build (`app/phoneagent-excluded-sources.txt`), no native
-  socket or DNS imports, no `Log.v/d/i` calls left in release and ci builds, and merged-manifest
-  rules (exactly the approved permissions, so a new one or a removed one fails; intent filters and
-  package-visibility entries only from approved lists; no component other apps can start beyond
-  an approved list; cleartext and backups off; WebView metrics and Safe Browsing off; no
-  EmojiCompat initializer).
+- `check<Variant>Apk` runs with every `assemble<Variant>`, `install<Variant>` and `bundle<Variant>`
+  and inspects the built APK:
+  - dex: no forbidden classes; telemetry classes only from `:telemetry-stub`; no reference at all
+    to `android.speech` (speech recognition, `TextToSpeech`) or MediaPipe's audio tasks; no
+    `Log.v/d/i` calls left in release and ci builds;
+  - excluded upstream features (`app/phoneagent-excluded-sources.txt`): no class compiled from an
+    excluded file (by package and source-file name, D8's synthetic classes counted as their outer
+    class), no class at all in an excluded package without stand-ins, only stand-in classes (and
+    what Hilt and D8 generate from them) in an excluded package with stand-ins, no excluded asset.
+    This recognizes files by name and package, not by content: a copy under another name in
+    another package is caught only if it uses the speech classes above or a forbidden library;
+  - source sets: only the filtered `src/main`, `src/phoneagentStandins` and test source sets may
+    exist or feed the variant; stand-in files must be `*StandIns.kt`; no compiled source file may
+    declare a forbidden package;
+  - native libraries, every ABI: no socket or DNS imports, and no unapproved URL, host name, Java
+    networking class or telemetry word in their strings (above);
+  - the merged manifest and the manifest packaged in the APK, which must match: exactly the
+    approved permissions, whichever element asks for them (`uses-permission`,
+    `uses-permission-sdk-23`, `uses-permission-sdk-m`), and no declared permission but AndroidX's
+    own receiver permission; exactly the approved intent filters, compared whole (actions,
+    categories, data with scheme, host, port, path and MIME type), so a new, changed or missing one
+    fails; package-visibility entries only from an approved list; no component other apps can start
+    beyond an approved list; cleartext and backups off; WebView metrics and Safe Browsing off; no
+    EmojiCompat initializer.
 - `./gradlew -p build-logic test` (run by CI) tests these rules themselves, among them that every
   library upstream 1.0.23 would bring in (ML Kit GenAI, AICore, Firebase, Play services TFLite and
   OSS licenses, Firebase's uploader) is rejected.
@@ -181,6 +226,10 @@ PCAPdroid captures traffic per app through a local VPN. Nothing leaves the phone
      Google Play services or Firefox line up with the moment you opened PhoneAgent.
 7. Positive control: start a capture again, open Settings > Model list > **Refresh model list**.
    Expected: exactly one PhoneAgent connection, to `raw.githubusercontent.com:443`.
+8. MediaPipe tiles (the native uploader check): with their models already downloaded, start a
+   capture, use Scrapbook's **Magic touch** on a photo, let Smart Album index a few photos and run
+   one Video Moment Finder search. Expected: no PhoneAgent connection at all, in particular none
+   to `play.googleapis.com`.
 
 If you see a PhoneAgent connection in step 6, note the host, port and time and send me the
 connection list (Export > CSV).

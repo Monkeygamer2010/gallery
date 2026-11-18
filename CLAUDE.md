@@ -12,7 +12,8 @@ Full decisions: `docs/DECISIONS.md`. Phase log: `docs/LEARNINGS.md`. Traffic: `d
 - Ask only about decisions that are the owner's; otherwise record the assumption in DECISIONS.md.
 - Never print or commit secrets, tokens or keystores. Never log screen contents.
 - Privacy contract: no network at startup/idle; no Firebase, GMS or ML Kit deps (CI guard);
-  model list from cache/bundled snapshot, network only on "Refresh model list".
+  no unapproved URL, host, Java networking class or telemetry string in native libraries (APK
+  check); model list from cache/bundled snapshot, network only on "Refresh model list".
 - Safety rules are enforced in code, never by trusting the model. Screen text is untrusted data.
 
 ## Staying mergeable with upstream
@@ -21,7 +22,8 @@ Full decisions: `docs/DECISIONS.md`. Phase log: `docs/LEARNINGS.md`. Traffic: `d
 - Keep LICENSE and upstream headers; new files get an Apache-2.0 header.
 - `versionName` = upstream tag + `-phoneagent.N` (now `1.0.23-phoneagent.1`); `versionCode` stays 46
   so builds of every branch install over each other. Keep the pinned LiteRT-LM (0.18.0) unless a
-  change is required.
+  change is required, and MediaPipe pinned (tasks-vision 1.0.0, tasks-retrieval 1.1.0: 1.2.0's
+  native library has a Clearcut uploader) until a newer version passes the native rules.
 - Upstream features we don't ship stay in the tree, out of the build: one exclusion list
   (`app/phoneagent-excluded-sources.txt`) plus inert stand-ins (`app/src/phoneagentStandins`).
   Recipe, edited files and pitfalls: `docs/UPSTREAM_SYNC.md`.
@@ -34,7 +36,8 @@ export ANDROID_HOME=/opt/android-sdk     # cloud VM; see below if missing
 ./gradlew :app:testDebugUnitTest         # JVM unit tests (pure logic)
 ./gradlew -p build-logic test            # tests of the privacy guard and APK check rules
 ./gradlew :app:privacyGuard              # fails on forbidden deps/plugins; prints deps + licenses
-./gradlew :app:checkCiApk                # APK check (dex, native, logs, manifest); runs with assembleCi
+./gradlew :app:checkCiApk                # APK check (dex, native imports+strings, logs, source sets,
+                                         # merged+packaged manifest); runs with assemble/install/bundle
 ./gradlew :app:updateThirdPartyLicenses  # regenerate the in-app licenses list after dep changes
 ./gradlew assembleCi                     # ".dev" CI build (signed from env, else debug key)
 ```
@@ -57,4 +60,7 @@ building more than one variant, and `./gradlew --stop` before switching worktree
   Pushes that change only `docs/` or Markdown outside `Android/src` skip it.
 - Signing secrets are set (KEYSTORE_B64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD): one key signs
   both pre-releases, certificate SHA-256 `9A:A9:…:5E:D5:57` (pinned as `RELEASE_CERT_SHA256` in the
-  workflow). Only the signing step sees them; never print, upload or commit them.
+  workflow). In the sync branch's workflow only the signing step has them (on the same runner as
+  the build); the older workflow on `claude/phone-agent-ik31nz` still gives them to the whole
+  Gradle step, so never re-run its runs and don't push there before it gets the new workflow.
+  Never print, upload or commit them.

@@ -501,9 +501,13 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
   engine switcher in Settings. The XR task is never registered (its module is excluded), so it has
   no card, route, featured slot or model.
 - What that removes from the app: read-aloud buttons, banner and auto-play in chats; the
-  microphone in the chat input; hold-to-dictate in Tiny Garden and Mobile Actions (text only); the
-  config sheet's Audio tab and its promo; the speech models tab and the 7 speech models of the
-  1.0.23 list; the speech engine setting; the XR language teacher and its assets.
+  dictation button in the chat input; hold-to-dictate in Tiny Garden and Mobile Actions (text
+  only); the config sheet's Audio tab and its promo; the speech models tab and the 7 speech models
+  of the 1.0.23 list; the speech engine setting; the XR language teacher and its assets.
+  **Correction (audit, 2026-11-18):** an earlier version said "the microphone in the chat input".
+  The chat microphone stays: **Record audio clip** (AI Chat and Agent Chat **+** menu) and the
+  **Audio Scribe** tile record the microphone for the on-device model, with `RECORD_AUDIO`; Mobile
+  Actions and Tiny Garden still ask for that permission on open. See "Open decisions".
 - Also out: `data/SpeechEngineError.kt` and `ui/common/SpeechEngineErrorDialog.kt` (only excluded
   code used them; the dialog held a Play Store link).
 - Assumption: unused strings of the excluded features and one vector icon stay in the resources
@@ -519,8 +523,11 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
 - **Archives** (`phoneagent/downloads/ZipPolicy.kt`, marked blocks in `DownloadZipExtractor.kt`
   and `DownloadWorker.kt`): upstream already refused entries outside the unzip folder. The unzip
   folder itself (a model-list field) must be inside the model's folder; an archive is checked
-  before anything is written (at most 20,000 entries and 16 GiB unpacked); while unpacking, more
-  entries or bytes than it declares stop it; a refused archive is deleted with what was unpacked.
+  before anything is written (at most 20,000 entries and 16 GiB unpacked, no entry above 1 MiB
+  compressed more than 100 to 1, no entry that replaces a file of the model or names the same file
+  as another, ignoring case); while unpacking, an entry its directory doesn't list, or more bytes
+  than declared for an entry or in all, stop it; a refused archive is deleted with the files and
+  folders unpacked from it (audit fixes, 2026-11-18).
 - **Model list:** the bundled snapshot is upstream's `1_0_23` list (required by the versionName). It
   keeps the 11 models of `1_0_20` byte for byte and adds 7 speech models, all skipped.
 - **Telemetry:** upstream's new events (model import, downloads, buttons) go to the no-op wrapper.
@@ -573,8 +580,14 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
 - **How CI uses it** (the sync branch's workflow since `a202ac0`; the main branch gets it with the
   merge): one step decodes the keystore into a private temp folder, re-signs Gradle's APK with
   `apksigner` (scheme v2, as Gradle signs) and deletes the keystore on every exit; a cleanup step at
-  the end of the job deletes it again even when the job failed. Gradle, its plugins and annotation
-  processors never see a secret (they build with a throwaway debug key). The certificate's SHA-256
+  the end of the job deletes it again even when the job failed. No Gradle step has a secret in its
+  environment (they build with a throwaway debug key). **Correction (audit, 2026-11-18):** an
+  earlier version said Gradle and its plugins "never see a secret". That holds for the
+  environment only: the signing step runs on the same runner, as the same user, right after the
+  build, and the runner removes leftover processes only at the end of the job, so a compromised
+  build dependency could still reach the keystore or the passwords. A separate signing job that
+  runs no repository code would close this; not done yet (no workflow changes in the fix pass).
+  The certificate's SHA-256
   is printed in the log and in the pre-release notes. An APK whose certificate isn't the pinned one
   fails the build and is never published; without the secrets a run compiles and tests but uploads
   and publishes nothing. When a secret looks wrong, the error names which one without printing it.
@@ -591,3 +604,54 @@ paused state with Resume and Discard replaces our "(paused)" label and button).
   masking; it is the owner's choice.
 - Local builds (`./gradlew assembleCi`) still sign with the keystore named by
   `PHONEAGENT_KEYSTORE_FILE` plus the three passwords, or else the debug key; they are not published.
+
+## Audit of the upstream sync (2026-11-18): fixes and decisions
+
+The audit of `upstream-sync-1.0.23` at `4c38e44` and its fix pass. Findings and resolutions:
+`docs/LEARNINGS.md`, "Audit of the 1.0.23 sync and fix pass".
+
+- **MediaPipe pinned** to the main build's versions (see "Downloads, model list, telemetry").
+- **Native-library rules** in the APK check: every URL, host name, Java networking class and
+  telemetry word in a native library's strings must be on `ApkRules.NATIVE_ALLOWLIST` for that
+  library, each entry with its reason. The list started empty; what the pinned build needs was
+  added: the NDK compiler's version string, documentation and bug links in LiteRT-LM's and
+  MediaPipe's error messages, JSON Schema identifiers, protobuf type-URL prefixes, a build-machine
+  name in a build path, a Go package name in a protobuf descriptor, `android/net/Uri`, and TFLite's
+  hooks into Play services' TFLite logger in `libsqlite_vector_store_jni.so` (tasks-retrieval
+  1.1.0, also on the main build). Assumption: those hooks are inert here, because they call a Java
+  object that only Play services' TFLite library can supply, and that library is forbidden and
+  absent. If the owner doesn't want even dormant hooks, Smart Album and Video Moment Finder (the
+  users of tasks-retrieval) would have to leave the build.
+- **Archives:** two entries for the same file, or for names that differ only in case, refuse the
+  archive (the models folder is on case-folding shared storage, and a later entry would silently
+  replace an earlier one). The ratio cap is 100 to 1 for entries above 1 MiB: Smart Album's
+  `samples.zip` (photos), the only archive in the model list, is far below it.
+- **Licence page:** closing it ends the pending download and drops the licence refusal from the
+  model's status, so the next tap on Download tries again with the stored token; upstream
+  restarted the download by itself.
+- **AppAuth's redirect activity** is removed from the manifest until Hugging Face login is
+  configured; restore it together with a real client id and redirect.
+- **Source sets:** only the filtered `src/main`, `src/phoneagentStandins` and test source sets are
+  allowed. The debug-only exported components (`androidx.compose.ui.tooling.PreviewActivity`,
+  `androidx.activity.ComponentActivity`) stay explicit in `ApkRules.APPROVED_EXPORTED_DEBUG`.
+- **JVM unit tests** let framework stubs return defaults (`unitTests.isReturnDefaultValues`):
+  upstream's extractor logs a malformed archive and goes on, as it does on a phone.
+- **Final size check before rename (audit N9): not done**, recorded as a known gap
+  (`docs/UPSTREAM_SYNC.md`). The worker gets only the download's total, not each file's size, and
+  the model list's sizes are not confirmed exact (several are multiples of 4 KiB); a wrong size
+  would make a good download unusable.
+
+## Open decisions (the owner's)
+
+- **The chat microphone.** Record audio clip (AI Chat, Agent Chat), the Audio Scribe tile and the
+  `RECORD_AUDIO` permission are in the build: on-device only, but they record speech for the model
+  to understand, which a strict "no voice" reading excludes. Mobile Actions and Tiny Garden ask for
+  the permission on open and show nothing without it, although nothing in them records any more.
+  Options: keep and document as an on-device exception; or remove (marked blocks: no audio picker
+  in the chat input, Audio Scribe not registered, no microphone gate in Mobile Actions and Tiny
+  Garden, `RECORD_AUDIO` removed from the manifest and from the APK check's approved set). Not
+  changed in the fix pass.
+- **The signing job.** Move signing to a separate job that never runs repository code (and the
+  secrets to a protected environment), and bring the new workflow to `claude/phone-agent-ik31nz`
+  before any further push there. Not changed in the fix pass (no workflow changes).
+

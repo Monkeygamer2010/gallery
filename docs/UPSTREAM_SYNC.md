@@ -104,16 +104,23 @@ Out of the build since 1.0.23:
 fully-qualified names (`*StandIns.kt`, one file per package), so upstream's files compile unchanged:
 
 - `rememberChatTtsController()` and `rememberChatAsrDictationViewModel()` return null (upstream's
-  own "not available" path: no read-aloud, no microphone button);
+  own "not available" path: no read-aloud, no dictation button; the chat's **Record audio clip**
+  and the Audio Scribe tile are not voice features of this list and stay, see `docs/DECISIONS.md`,
+  "Open decisions");
 - `HoldToDictateViewModel.dictationAvailable` is false (Tiny Garden and Mobile Actions show text
   input only);
 - the Audio tab state is empty (no Audio tab), no task is eligible for the audio promo, no speech
   model is registered, the selection screen is never needed.
 
-Compiling a stand-in next to the real file fails with a redeclaration, so a passing build proves the
-excluded file isn't in it. `checkCiApk` then proves it for the APK: no class compiled from an
-excluded file (the dex keeps each class's source file name), no class at all in an excluded
-package without stand-ins, no excluded asset.
+Compiling a stand-in next to the real file fails with a redeclaration, so a passing build shows the
+excluded file isn't in it. `checkCiApk` then checks the APK: no class compiled from an excluded
+file (the dex keeps each class's source file name; D8's synthetic classes count as their outer
+class), no class at all in an excluded package without stand-ins, only stand-in classes (and what
+Hilt and D8 generate from them) in an excluded package with stand-ins, no excluded asset, no
+reference to the platform's speech classes, and no source set besides the filtered `src/main`,
+`src/phoneagentStandins` and the test sets. It recognizes files by name and package, not by
+content: a copy of excluded code under another name in another package is caught only through the
+classes it uses.
 
 **After a merge:**
 
@@ -129,6 +136,14 @@ package without stand-ins, no excluded asset.
    line.
 4. Search the compiled sources for new URL literals and network calls against the previous build
    and record them in `docs/NETWORK.md`.
+5. **Scan the native libraries**, every ABI, of the new APK against the previous one. `checkCiApk`
+   fails on any URL, host name, Java networking class (`java/net`, `javax/net`, `android/net`) or
+   telemetry word (`clearcut`, `playlog`, `firebase`, `telemetry`, ...) in a native library's strings
+   that `ApkRules.NATIVE_ALLOWLIST` doesn't approve for that library. A finding is never
+   allowlisted to make a build pass: find out what it is (`strings -n 6 lib/arm64-v8a/<lib>.so |
+   grep -F '<finding>'` around it), and add an entry with its reason only if it cannot reach the
+   network; otherwise pin the library back or take its feature out, as for MediaPipe 1.2.0. Kotlin
+   and dex being clean says nothing about native code.
 
 ## Files where the fork edits upstream code
 
@@ -145,10 +160,15 @@ tag, `git diff --numstat 1.0.23 HEAD`):
   `phoneagent_*`.
 - App shell: `Analytics.kt`, `GalleryApplication.kt`, `MainActivity.kt`, `GalleryAppTopBar.kt`,
   `intents/IntentHandler.kt`, `di/AppModule.kt`, `runtime/ModelHelperExt.kt`.
-- Model manager and downloads: `ui/modelmanager/ModelManagerViewModel.kt` (+39/-42),
-  `ui/modelmanager/GlobalModelManager.kt`, `data/DownloadRepository.kt`, `data/ModelUtils.kt`,
-  `worker/DownloadWorker.kt`, `worker/DownloadSlowConnectionDetector.kt`,
-  `worker/DownloadZipExtractor.kt`, `ui/common/ModelDownloadGates.kt`.
+- Model manager and downloads: `ui/modelmanager/ModelManagerViewModel.kt` (+39/-42; the audit
+  fixes add `forgetLicenceRefusal`), `ui/modelmanager/GlobalModelManager.kt`,
+  `data/DownloadRepository.kt`, `data/ModelUtils.kt`, `worker/DownloadWorker.kt` (protected file
+  names for archives), `worker/DownloadSlowConnectionDetector.kt`, `worker/DownloadZipExtractor.kt`
+  (protected files), `ui/common/ModelDownloadGates.kt` (login guard; the licence page no longer
+  restarts a download).
+- Audit fixes (2026-11-18) also touch: `gradle/libs.versions.toml` (MediaPipe pinned),
+  `app/build.gradle.kts` (unit-test framework stubs return defaults), `AndroidManifest.xml`
+  (AppAuth's redirect activity removed).
 - Screens: `ui/navigation/GalleryNavGraph.kt`, `ui/home/SettingsDialog.kt`, `ui/home/HomeScreen.kt`,
   `ui/common/ModelPageAppBar.kt`, `ui/common/textandvoiceinput/TextAndVoiceInput.kt`,
   `ui/common/chat/ChatMessage.kt`, `ui/common/chat/MessageBodyWebview.kt`,
@@ -215,3 +235,21 @@ Each was resolved in 1.0.23 as recorded in `docs/DECISIONS.md`; the same files w
   every sync.
 - **versionCode.** Upstream's versionCode (52 at 1.0.23) is not taken: builds of every branch stay
   at the fork's versionCode so they install over each other in both directions.
+- **Native code can phone home through Java.** MediaPipe 1.2.0's native library sends usage
+  stats with `java.net.HttpURLConnection` over JNI: no socket import, no dex class, nothing the
+  Java stub or the dependency guard can see. Step 5 of "After a merge" exists for this.
+- **Generated classes live in the stand-ins' packages.** Hilt writes `<Type>_Factory` and
+  `<Type>_HiltModules*` next to each injectable stand-in, and D8 writes `$$ExternalSynthetic*`
+  classes with the source name `D8$$SyntheticClass`; the APK check accepts exactly these.
+- **The licence page restarted a download.** Upstream's `ModelDownloadGates.onAgreementTabClosed`
+  restarted a licence-gated download when the tab closed; the fork drops the licence refusal and
+  waits for a tap. Check that this block survives a merge.
+
+## Known gaps
+
+- **No final size check before a model file is renamed** (audit N9). The worker checks each
+  response's body against its Content-Length, but not the finished file against the model list's
+  size, so a server that serves a short file whole leaves a short model. Closing it needs each
+  file's expected size in the work's input (DownloadRepository passes only the total), and model
+  list sizes known to be exact (several are multiples of 4 KiB, which may be rounding). Until then
+  a short file shows up as a model that fails to load; Discard and Download fix it.
