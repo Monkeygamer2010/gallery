@@ -157,7 +157,7 @@ internal object ApkRules {
   val APPROVED_EXPORTED =
     setOf(
       "com.google.ai.edge.gallery.MainActivity", // launcher only; no deep links
-      "net.openid.appauth.RedirectUriReceiverActivity", // OAuth redirect, unused until HF login is configured
+      // AppAuth's RedirectUriReceiverActivity is removed from the manifest until HF login is configured.
     )
 
   /** Debug-only tooling that may be exported in debug builds. */
@@ -186,7 +186,6 @@ internal object ApkRules {
   val APPROVED_INTENT_FILTERS =
     setOf(
       "com.google.ai.edge.gallery.MainActivity | action=android.intent.action.MAIN | category=android.intent.category.LAUNCHER",
-      "net.openid.appauth.RedirectUriReceiverActivity | action=android.intent.action.VIEW | category=android.intent.category.BROWSABLE,android.intent.category.DEFAULT | data=scheme:REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP",
       "com.google.ai.edge.gallery.phoneagent.a11y.PhoneAgentAccessibilityService | action=android.accessibilityservice.AccessibilityService",
       "com.google.ai.edge.gallery.phoneagent.tile.PhoneAgentTileService | action=android.service.quicksettings.action.QS_TILE",
       // AndroidX internals, reachable only by the system or adb (see SYSTEM_PERMISSIONS).

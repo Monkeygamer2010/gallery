@@ -188,6 +188,14 @@
             tools:node="merge">
         </service>
 
+        <!-- PhoneAgent fork: AppAuth's exported OAuth redirect activity is removed. Hugging Face
+             login isn't configured in this build (placeholder client id and redirect), so the
+             activity would only be an entry point other apps and web pages can open. Restore it
+             together with a real login configuration (docs/SECURITY.md). -->
+        <activity
+            android:name="net.openid.appauth.RedirectUriReceiverActivity"
+            tools:node="remove" />
+
         <!-- PhoneAgent privacy contract (docs/NETWORK.md): no WebView usage metrics, no Safe
              Browsing lookups. -->
         <meta-data

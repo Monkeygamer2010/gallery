@@ -373,5 +373,25 @@ class ApkRulesTest {
       dir.deleteRecursively()
     }
   }
+
+  /** Audit finding N7: AppAuth's exported redirect activity is gone, and coming back fails the check. */
+  @Test
+  fun theOAuthRedirectActivityIsNotApproved() {
+    assertTrue(ApkRules.APPROVED_EXPORTED.none { it.contains("RedirectUriReceiverActivity") })
+    assertTrue(ApkRules.APPROVED_INTENT_FILTERS.none { it.contains("RedirectUriReceiverActivity") })
+    val root =
+      manifest(
+        """<application android:usesCleartextTraffic="false" android:allowBackup="false">
+             <activity android:name="net.openid.appauth.RedirectUriReceiverActivity" android:exported="true">
+               <intent-filter><action android:name="android.intent.action.VIEW" />
+                 <category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" />
+                 <data android:scheme="REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP" /></intent-filter>
+             </activity>
+           </application>"""
+      )
+    val problems = checkManifest(root, "ci")
+    assertTrue(problems.joinToString(), "activity net.openid.appauth.RedirectUriReceiverActivity is exported" in problems)
+    assertTrue(problems.joinToString(), problems.any { it.startsWith("intent filter 'net.openid.appauth.RedirectUriReceiverActivity |") })
+  }
 }
 
