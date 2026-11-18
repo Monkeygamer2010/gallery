@@ -50,6 +50,8 @@ internal suspend fun extractDownloadedZip(
   fileName: String,
   mainFileName: String?,
   unzippedDir: String?,
+  // PhoneAgent fork: the names of every file this download writes; no entry may replace one.
+  protectedFileNames: List<String> = emptyList(),
 ) {
   val destDir =
     when {
@@ -76,12 +78,19 @@ internal suspend fun extractDownloadedZip(
       else -> outputDir
     }
   // PhoneAgent fork: the archive is checked as a whole before anything is written, and the guard
-  // then counts what is really unpacked. A refused archive is deleted (ZipPolicy, docs/SECURITY.md).
+  // then counts what is really unpacked. No entry may replace a file of the model (its own files,
+  // their partial files and markers, or a file already in its folder). A refused archive is
+  // deleted with what was unpacked from it (ZipPolicy, docs/SECURITY.md).
+  val phoneagentProtected =
+    (protectedFileNames + listOfNotNull(mainFileName))
+      .flatMap { listOf(it, "$it.${com.google.ai.edge.gallery.data.TMP_FILE_EXT}", "$it.$UNPACKED_FILE_EXT") }
+      .map { File(outputDir, it) } + outputDir.listFiles().orEmpty().filter { it.isFile }
   val phoneagentGuard =
     com.google.ai.edge.gallery.phoneagent.downloads.ZipPolicy.open(
       archive = originalFile,
       modelDir = outputDir,
       destDir = destDir,
+      protectedFiles = phoneagentProtected,
     )
   if (!destDir.exists()) {
     destDir.mkdirs()

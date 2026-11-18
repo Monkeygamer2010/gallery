@@ -235,6 +235,10 @@ android {
     kotlin.setSrcDirs(dirs)
     assets.setSrcDirs(listOf(filteredMainAssets.get().asFile))
   }
+  // PhoneAgent fork: in JVM unit tests android.util.Log and other framework stubs return defaults
+  // instead of throwing, as on a phone where logging never fails. The hostile-archive tests
+  // (HostileArchivesTest) run upstream's extractor, which logs a malformed archive and goes on.
+  testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 // Every compile, KSP, asset and lint task depends on preBuild, so the filtered copy is current.

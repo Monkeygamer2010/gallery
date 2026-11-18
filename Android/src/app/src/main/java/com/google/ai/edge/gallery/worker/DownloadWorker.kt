@@ -454,6 +454,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) :
                 fileName = file.fileName,
                 mainFileName = fileName,
                 unzippedDir = unzippedDir,
+                protectedFileNames = allFiles.map { it.fileName }, // PhoneAgent fork
               )
             }
           }
