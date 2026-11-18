@@ -270,18 +270,21 @@ internal constructor(
     )
   }
 
-  /** Continues the download once the user closes the user agreement tab. */
+  /** Ends the pending download once the user closes the user agreement tab. */
   internal fun onAgreementTabClosed() {
-    Log.d(TAG, "User closes the browser tab. Restarting the download.")
-    // The token may have expired while the tab was open; sign in again rather than retry with it.
-    val token = modelManagerViewModel.validStoredAccessToken()
-    if (token == null) {
-      startTokenExchange()
-    } else {
-      val request = accessRequest ?: fallback?.toAccessRequest() ?: return
-      accessRequest = null
-      request.onAccessible(token, false)
-    }
+    // PhoneAgent fork: closing the licence page never restarts the download (upstream restarted
+    // it here). The download is left ready: the next tap on Download tries again (docs/NETWORK.md).
+    Log.d(TAG, "User closes the browser tab. The download waits for a tap.")
+    val request = accessRequest ?: fallback?.toAccessRequest() ?: return
+    accessRequest = null
+    modelManagerViewModel.forgetLicenceRefusal(request.model)
+    android.widget.Toast.makeText(
+        context,
+        com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy.LICENCE_TAB_CLOSED_MESSAGE,
+        android.widget.Toast.LENGTH_LONG,
+      )
+      .show()
+    request.onAborted()
   }
 
   /** Opens [model]'s user agreement in a custom tab and dismisses the agreement sheet. */

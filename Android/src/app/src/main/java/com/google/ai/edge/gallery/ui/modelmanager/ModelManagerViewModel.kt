@@ -1889,6 +1889,16 @@ constructor(
    * once, even if several buttons show the model. A sign-in refusal right after signing in isn't
    * asked about again: the OAuth flow can complete without user input, so it could loop.
    */
+  // PhoneAgent fork: after the licence page closes, the next tap on Download tries again rather
+  // than asking for the licence again; nothing downloads until then (ModelDownloadGates).
+  fun forgetLicenceRefusal(model: Model) {
+    _uiState.update { state ->
+      val status = state.modelDownloadStatus[model.name] ?: return@update state
+      val next = com.google.ai.edge.gallery.phoneagent.downloads.DownloadPolicy.statusAfterLicenceTabClosed(status)
+      if (next == status) state else state.copy(modelDownloadStatus = state.modelDownloadStatus + (model.name to next))
+    }
+  }
+
   fun takeAuthErrorToPrompt(model: Model): DownloadAuthError? {
     val authError = uiState.value.modelDownloadStatus[model.name]?.authError ?: return null
     val afterSignIn = userStartedDownloads.remove(model.name) ?: return null

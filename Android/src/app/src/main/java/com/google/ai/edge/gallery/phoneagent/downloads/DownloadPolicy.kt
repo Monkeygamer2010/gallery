@@ -16,6 +16,8 @@
 
 package com.google.ai.edge.gallery.phoneagent.downloads
 
+import com.google.ai.edge.gallery.data.DownloadAuthError
+import com.google.ai.edge.gallery.data.ModelDownloadStatus
 import java.net.URI
 import java.util.UUID
 
@@ -30,6 +32,7 @@ import java.util.UUID
  *   and the next app start cancels such leftover work instead of attaching to it.
  * - Nothing restarts a download by itself: no resume at app start, and a rerun by the scheduler
  *   ends the download (DownloadWorker). A stopped download stays paused until the owner taps Resume.
+ * - Closing a gated model's licence page doesn't start the download either; it waits for a tap.
  */
 object DownloadPolicy {
   /** Input-data key carrying the [sessionId] a download was queued in. */
@@ -69,4 +72,16 @@ object DownloadPolicy {
    * keep going).
    */
   fun startedInThisProcess(tags: Set<String>): Boolean = sessionTag in tags
+
+  /** What the app tells the owner when the licence page closes. */
+  const val LICENCE_TAB_CLOSED_MESSAGE = "Licence page closed. Tap Download to download the model."
+
+  /**
+   * [status] once the owner closes a gated model's licence page. Upstream restarted the download
+   * there by itself; here nothing starts. The licence refusal is dropped so that the owner's next
+   * tap on Download tries again (with the stored token) instead of showing the licence sheet again.
+   * Any other refusal (a missing token) stays.
+   */
+  fun statusAfterLicenceTabClosed(status: ModelDownloadStatus): ModelDownloadStatus =
+    if (status.authError == DownloadAuthError.NEEDS_LICENSE_ACCEPTANCE) status.copy(authError = null) else status
 }

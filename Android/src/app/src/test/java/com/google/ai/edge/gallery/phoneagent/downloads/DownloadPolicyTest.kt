@@ -16,6 +16,9 @@
 
 package com.google.ai.edge.gallery.phoneagent.downloads
 
+import com.google.ai.edge.gallery.data.DownloadAuthError
+import com.google.ai.edge.gallery.data.ModelDownloadStatus
+import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.worker.buildAuthorizationHeaderValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -101,4 +104,22 @@ class DownloadPolicyTest {
     assertTrue(DownloadPolicy.isSchedulerRerun(1))
     assertTrue(DownloadPolicy.isSchedulerRerun(5))
   }
+
+  /** Audit finding N6: closing the licence page restarted the download without a second tap. */
+  @Test
+  fun closingTheLicencePageLeavesTheDownloadReadyForATap() {
+    val refused =
+      ModelDownloadStatus(status = ModelDownloadStatusType.FAILED, errorMessage = "403", authError = DownloadAuthError.NEEDS_LICENSE_ACCEPTANCE)
+    val after = DownloadPolicy.statusAfterLicenceTabClosed(refused)
+    // Nothing is downloading: the status stays what the refused attempt left (not IN_PROGRESS),
+    // and the licence refusal is gone, so the next tap on Download downloads instead of showing
+    // the licence sheet again (ModelManagerViewModel.downloadClickAction: no authError -> Download).
+    assertEquals(ModelDownloadStatusType.FAILED, after.status)
+    assertNull(after.authError)
+    assertEquals(refused.copy(authError = null), after)
+    // A missing token is not the licence: it still asks for a token on the next tap.
+    val needsToken = refused.copy(authError = DownloadAuthError.NEEDS_SIGN_IN)
+    assertEquals(needsToken, DownloadPolicy.statusAfterLicenceTabClosed(needsToken))
+  }
 }
+
